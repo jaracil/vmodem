@@ -1,0 +1,8 @@
+# Go workspace file
+go.work
+go.work.sum
+
+# vmodem binary
+cmd/vmodem/vmodem
+
+
