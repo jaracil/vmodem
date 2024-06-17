@@ -12,21 +12,41 @@ import (
 )
 
 var (
-	ErrConfigRequired = errors.New("config required")
-	ErrModemBusy      = errors.New("modem busy")
+	ErrConfigRequired         = errors.New("config required")
+	ErrModemBusy              = errors.New("modem busy")
+	ErrInvalidStateTransition = errors.New("invalid state transition")
 )
 
 // ModemStatus represents the status of the modem
 type ModemStatus int
 
 const (
-	StatusIdle ModemStatus = iota
+	StatusIdle ModemStatus = iota // Initial state
 	StatusDialing
 	StatusConnected
 	StatusConnectedCmd
 	StatusRinging
-	StatusAnswering
+	StatusClosed // Terminal state, dead modem
 )
+
+func (ms ModemStatus) String() string {
+	switch ms {
+	case StatusIdle:
+		return "Idle"
+	case StatusDialing:
+		return "Dialing"
+	case StatusConnected:
+		return "Connected"
+	case StatusConnectedCmd:
+		return "ConnectedCmd"
+	case StatusRinging:
+		return "Ringing"
+	case StatusClosed:
+		return "Closed"
+	default:
+		return "Unknown"
+	}
+}
 
 type CmdReturn int
 
@@ -42,23 +62,23 @@ const (
 )
 
 type Modem struct {
-	sync.Mutex
-	ctx        context.Context
-	cancel     context.CancelFunc
-	st         ModemStatus
-	tty        io.ReadWriteCloser
-	conn       io.ReadWriteCloser
-	OutgoingCb OutgoingCall
-	sregs      map[byte]byte
-	echo       bool
-	shortForm  bool
+	sync.RWMutex
+	ctx          context.Context
+	cancel       context.CancelFunc
+	st           ModemStatus
+	tty          io.ReadWriteCloser
+	conn         io.ReadWriteCloser
+	OutgoingCall OutgoingCallType
+	sregs        map[byte]byte
+	echo         bool
+	shortForm    bool
 }
 
-type OutgoingCall func(number string) (io.ReadWriteCloser, error)
+type OutgoingCallType func(m *Modem, number string) (io.ReadWriteCloser, CmdReturn)
 
 type ModemConfig struct {
-	OutgoingCb OutgoingCall
-	TTY        io.ReadWriteCloser
+	OutgoingCall OutgoingCallType
+	TTY          io.ReadWriteCloser
 }
 
 func checkValidCmdChar(b byte) bool {
@@ -126,28 +146,53 @@ func (m *Modem) printRetCode(ret CmdReturn) {
 	m.TtyWriteStr(m.Cr() + retStr + m.Cr())
 }
 
-func (m *Modem) setStatus(status ModemStatus) {
+func (m *Modem) setStatus(status ModemStatus) error {
+	m.Lock()
+	defer m.Unlock()
+	prevStatus := m.st
+	if prevStatus == StatusClosed {
+		return ErrInvalidStateTransition
+	}
+	switch status {
+	case StatusConnected:
+		if prevStatus != StatusDialing && prevStatus != StatusRinging && prevStatus != StatusConnectedCmd {
+			return ErrInvalidStateTransition
+		}
+	case StatusConnectedCmd:
+		if prevStatus != StatusConnected {
+			return ErrInvalidStateTransition
+		}
+	case StatusDialing:
+		if prevStatus != StatusIdle {
+			return ErrInvalidStateTransition
+		}
+	case StatusRinging:
+		if prevStatus != StatusIdle {
+			return ErrInvalidStateTransition
+		}
+	}
 	m.st = status
+	fmt.Printf("Modem status transition: %v -> %v\n", prevStatus, status)
+	return nil
 }
 
 func (m *Modem) status() ModemStatus {
+	m.RLock()
+	defer m.RUnlock()
 	return m.st
 }
 
 func (m *Modem) Status() ModemStatus {
-	m.Lock()
-	defer m.Unlock()
 	return m.status()
 }
 
 func (m *Modem) close() {
+	m.setStatus(StatusClosed)
 	m.cancel()
 	m.tty.Close()
 }
 
 func (m *Modem) Close() {
-	m.Lock()
-	defer m.Unlock()
 	m.close()
 }
 
@@ -204,7 +249,32 @@ func (m *Modem) processCommand(cmdChar string, cmdNum string, cmdAssign bool, cm
 		default:
 			return RetCodeError
 		}
-
+	case "D":
+		if m.status() != StatusIdle {
+			return RetCodeError
+		}
+		if m.OutgoingCall != nil {
+			err := m.setStatus(StatusDialing)
+			if err != nil {
+				return RetCodeError
+			}
+			conn, ret := m.OutgoingCall(m, cmdAssignVal)
+			if ret == RetCodeConnect {
+				m.conn = conn
+				err = m.setStatus(StatusConnected)
+				if err != nil {
+					return RetCodeError
+				}
+			} else {
+				m.conn = nil
+				err = m.setStatus(StatusIdle)
+				if err != nil {
+					return RetCodeError
+				}
+			}
+			return ret
+		}
+		return RetCodeNoCarrier
 	}
 	return RetCodeOk
 }
@@ -401,13 +471,13 @@ func NewModem(ctx context.Context, config *ModemConfig) (*Modem, error) {
 
 	modemContext, modemCancel := context.WithCancel(ctx)
 	m := &Modem{
-		ctx:        modemContext,
-		cancel:     modemCancel,
-		st:         StatusIdle,
-		OutgoingCb: config.OutgoingCb,
-		tty:        config.TTY,
-		echo:       true,
-		sregs:      make(map[byte]byte),
+		ctx:          modemContext,
+		cancel:       modemCancel,
+		st:           StatusIdle,
+		OutgoingCall: config.OutgoingCall,
+		tty:          config.TTY,
+		echo:         true,
+		sregs:        make(map[byte]byte),
 	}
 
 	go m.ttyReadTask()

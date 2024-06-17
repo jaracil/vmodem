@@ -3,11 +3,17 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"time"
 
 	"github.com/aymanbagabas/go-pty"
 	vm "github.com/jaracil/vmodem"
 )
+
+func outGoingCall(m *vm.Modem, number string) (conn io.ReadWriteCloser, ret vm.CmdReturn) {
+	fmt.Printf("Dialing %s\n", number)
+	return nil, vm.RetCodeNoCarrier
+}
 
 func main() {
 	cmdTTY, err := pty.New()
@@ -18,8 +24,8 @@ func main() {
 	fmt.Printf("tty path: %s\r\n", cmdTTY.Name())
 
 	m, err := vm.NewModem(context.Background(), &vm.ModemConfig{
-		OutgoingCb: nil,
-		TTY:        cmdTTY,
+		OutgoingCall: outGoingCall,
+		TTY:          cmdTTY,
 	})
 
 	if err != nil {
