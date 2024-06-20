@@ -15,6 +15,7 @@ var (
 	ErrConfigRequired         = errors.New("config required")
 	ErrModemBusy              = errors.New("modem busy")
 	ErrInvalidStateTransition = errors.New("invalid state transition")
+	ErrNoCarrier              = errors.New("no carrier")
 )
 
 // ModemStatus represents the status of the modem
@@ -75,7 +76,7 @@ type Modem struct {
 	shortForm    bool
 }
 
-type OutgoingCallType func(m *Modem, number string) (io.ReadWriteCloser, CmdReturn)
+type OutgoingCallType func(m *Modem, number string) (io.ReadWriteCloser, error)
 
 type ModemConfig struct {
 	OutgoingCall OutgoingCallType
@@ -91,9 +92,15 @@ func checkValidNumChar(b byte) bool {
 	return (b >= '0' && b <= '9')
 }
 
-func (m *Modem) TtyWriteStr(s string) {
+func (m *Modem) TtyWriteStrAsync(s string) {
 	m.Lock()
 	defer m.Unlock()
+	if m.st != StatusConnected {
+		m.TtyWriteStr(s)
+	}
+}
+
+func (m *Modem) TtyWriteStr(s string) {
 	fmt.Fprint(m.tty, s)
 }
 
@@ -149,21 +156,30 @@ func (m *Modem) printRetCode(ret CmdReturn) {
 }
 
 func (m *Modem) setStatus(status ModemStatus) error {
-	m.Lock()
-	defer m.Unlock()
 	prevStatus := m.st
 	if prevStatus == StatusClosed {
 		return ErrInvalidStateTransition
 	}
 	switch status {
+	case StatusIdle:
+		if prevStatus == StatusConnected || prevStatus == StatusConnectedCmd || prevStatus == StatusDialing {
+			m.printRetCode(RetCodeNoCarrier)
+		}
+		if prevStatus == StatusConnected || prevStatus == StatusConnectedCmd || prevStatus == StatusRinging {
+			m.conn.Close()
+			m.conn = nil
+		}
+
 	case StatusConnected:
 		if prevStatus != StatusDialing && prevStatus != StatusRinging && prevStatus != StatusConnectedCmd {
 			return ErrInvalidStateTransition
 		}
+		m.printRetCode(RetCodeConnect)
 	case StatusConnectedCmd:
 		if prevStatus != StatusConnected {
 			return ErrInvalidStateTransition
 		}
+		m.printRetCode(RetCodeOk)
 	case StatusDialing:
 		if prevStatus != StatusIdle {
 			return ErrInvalidStateTransition
@@ -179,12 +195,12 @@ func (m *Modem) setStatus(status ModemStatus) error {
 }
 
 func (m *Modem) status() ModemStatus {
-	m.RLock()
-	defer m.RUnlock()
 	return m.st
 }
 
 func (m *Modem) Status() ModemStatus {
+	m.RLock()
+	defer m.RUnlock()
 	return m.status()
 }
 
@@ -204,7 +220,10 @@ func (m *Modem) IncomingCall(conn io.ReadWriteCloser) error {
 	if m.status() != StatusIdle {
 		return ErrModemBusy
 	}
-	m.setStatus(StatusRinging)
+	err := m.setStatus(StatusRinging)
+	if err != nil {
+		return err
+	}
 	m.conn = conn
 	return nil
 }
@@ -260,23 +279,48 @@ func (m *Modem) processCommand(cmdChar string, cmdNum string, cmdAssign bool, cm
 			if err != nil {
 				return RetCodeError
 			}
-			conn, ret := m.outgoingCall(m, cmdAssignVal)
-			if ret == RetCodeConnect {
-				m.conn = conn
-				err = m.setStatus(StatusConnected)
-				if err != nil {
-					return RetCodeError
-				}
-			} else {
-				m.conn = nil
-				err = m.setStatus(StatusIdle)
-				if err != nil {
-					return RetCodeError
-				}
+			conn, err := m.outgoingCall(m, cmdAssignVal)
+			if err != nil {
+				m.setStatus(StatusIdle)
+				return RetCodeSilent
 			}
-			return ret
+			m.conn = conn
+			err = m.setStatus(StatusConnected)
+			if err != nil {
+				return RetCodeError
+			}
+			return RetCodeSilent
 		}
 		return RetCodeNoCarrier
+	case "A":
+		if m.status() == StatusIdle {
+			return RetCodeNoCarrier
+		}
+		if m.status() != StatusRinging {
+			return RetCodeError
+		}
+		err := m.setStatus(StatusConnected)
+		if err != nil {
+			return RetCodeError
+		}
+		return RetCodeSilent
+	case "H":
+		if m.status() == StatusConnected || m.status() == StatusConnectedCmd {
+			err := m.setStatus(StatusIdle)
+			if err != nil {
+				return RetCodeError
+			}
+			return RetCodeSilent
+		}
+	case "O":
+		if m.status() != StatusConnectedCmd {
+			return RetCodeError
+		}
+		err := m.setStatus(StatusConnected)
+		if err != nil {
+			return RetCodeError
+		}
+		return RetCodeSilent
 	}
 	return RetCodeOk
 }
@@ -398,16 +442,18 @@ func (m *Modem) ttyReadTask() {
 	buffer := *bytes.NewBuffer(nil)
 	byteBuff := make([]byte, 1)
 	lastCmd := ""
-
+	m.Lock()
 	for {
 		if m.ctx.Err() != nil {
 			break
 		}
+		m.Unlock()
 		n, err := m.tty.Read(byteBuff)
+		m.Lock()
 		if err != nil || n == 0 {
 			break
 		}
-		if m.Status() == StatusConnected { // online mode pass-through
+		if m.status() == StatusConnected { // online mode pass-through
 			if m.conn != nil {
 				m.conn.Write(byteBuff)
 			}
@@ -416,9 +462,7 @@ func (m *Modem) ttyReadTask() {
 
 		if !atFlag {
 			if m.echo {
-				m.Lock()
 				m.tty.Write(byteBuff)
-				m.Unlock()
 			}
 			if bytes.ToUpper(byteBuff)[0] == 'A' {
 				aFlag = true
@@ -453,13 +497,12 @@ func (m *Modem) ttyReadTask() {
 			if buffer.Len() < 100 && strconv.IsPrint(rune(byteBuff[0])) {
 				buffer.Write(byteBuff)
 				if m.echo {
-					m.Lock()
 					m.tty.Write(byteBuff)
-					m.Unlock()
 				}
 			}
 		}
 	}
+	m.Unlock()
 }
 
 func NewModem(ctx context.Context, config *ModemConfig) (*Modem, error) {

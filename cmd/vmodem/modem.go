@@ -14,9 +14,9 @@ var (
 	ttyCount int = 0
 )
 
-func outGoingCall(m *vm.Modem, number string) (conn io.ReadWriteCloser, ret vm.CmdReturn) {
+func outGoingCall(m *vm.Modem, number string) (io.ReadWriteCloser, error) {
 	fmt.Printf("Dialing %s\n", number)
-	return nil, vm.RetCodeNoCarrier
+	return nil, vm.ErrNoCarrier
 }
 
 func main() {
