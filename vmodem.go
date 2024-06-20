@@ -68,7 +68,8 @@ type Modem struct {
 	st           ModemStatus
 	tty          io.ReadWriteCloser
 	conn         io.ReadWriteCloser
-	OutgoingCall OutgoingCallType
+	outgoingCall OutgoingCallType
+	connectStr   string
 	sregs        map[byte]byte
 	echo         bool
 	shortForm    bool
@@ -79,6 +80,7 @@ type OutgoingCallType func(m *Modem, number string) (io.ReadWriteCloser, CmdRetu
 type ModemConfig struct {
 	OutgoingCall OutgoingCallType
 	TTY          io.ReadWriteCloser
+	ConnectStr   string
 }
 
 func checkValidCmdChar(b byte) bool {
@@ -132,7 +134,7 @@ func (m *Modem) printRetCode(ret CmdReturn) {
 		case RetCodeError:
 			retStr = "ERROR"
 		case RetCodeConnect:
-			retStr = "CONNECT"
+			retStr = m.connectStr
 		case RetCodeNoCarrier:
 			retStr = "NO CARRIER"
 		case RetCodeNoDialtone:
@@ -253,12 +255,12 @@ func (m *Modem) processCommand(cmdChar string, cmdNum string, cmdAssign bool, cm
 		if m.status() != StatusIdle {
 			return RetCodeError
 		}
-		if m.OutgoingCall != nil {
+		if m.outgoingCall != nil {
 			err := m.setStatus(StatusDialing)
 			if err != nil {
 				return RetCodeError
 			}
-			conn, ret := m.OutgoingCall(m, cmdAssignVal)
+			conn, ret := m.outgoingCall(m, cmdAssignVal)
 			if ret == RetCodeConnect {
 				m.conn = conn
 				err = m.setStatus(StatusConnected)
@@ -474,10 +476,15 @@ func NewModem(ctx context.Context, config *ModemConfig) (*Modem, error) {
 		ctx:          modemContext,
 		cancel:       modemCancel,
 		st:           StatusIdle,
-		OutgoingCall: config.OutgoingCall,
+		outgoingCall: config.OutgoingCall,
 		tty:          config.TTY,
+		connectStr:   config.ConnectStr,
 		echo:         true,
 		sregs:        make(map[byte]byte),
+	}
+
+	if m.connectStr == "" {
+		m.connectStr = "CONNECT"
 	}
 
 	go m.ttyReadTask()

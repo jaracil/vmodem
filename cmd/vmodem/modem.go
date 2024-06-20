@@ -10,6 +10,10 @@ import (
 	vm "github.com/jaracil/vmodem"
 )
 
+var (
+	ttyCount int = 0
+)
+
 func outGoingCall(m *vm.Modem, number string) (conn io.ReadWriteCloser, ret vm.CmdReturn) {
 	fmt.Printf("Dialing %s\n", number)
 	return nil, vm.RetCodeNoCarrier
