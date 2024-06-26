@@ -60,16 +60,20 @@ const (
 	RetCodeNoDialtone
 	RetCodeBusy
 	RetCodeNoAnswer
+	RetCodeSkip
 )
 
 type Modem struct {
-	sync.RWMutex
+	sync.Mutex
 	ctx          context.Context
 	cancel       context.CancelFunc
 	st           ModemStatus
+	stCtx        context.Context
+	stCtxCancel  context.CancelFunc
 	tty          io.ReadWriteCloser
 	conn         io.ReadWriteCloser
 	outgoingCall OutgoingCallType
+	commandHook  CommandHookType
 	connectStr   string
 	sregs        map[byte]byte
 	echo         bool
@@ -77,9 +81,11 @@ type Modem struct {
 }
 
 type OutgoingCallType func(m *Modem, number string) (io.ReadWriteCloser, error)
+type CommandHookType func(m *Modem, cmdChar string, cmdNum string, cmdAssign bool, cmdQuery bool, cmdAssignVal string) CmdReturn
 
 type ModemConfig struct {
 	OutgoingCall OutgoingCallType
+	CommandHook  CommandHookType
 	TTY          io.ReadWriteCloser
 	ConnectStr   string
 }
@@ -92,24 +98,44 @@ func checkValidNumChar(b byte) bool {
 	return (b >= '0' && b <= '9')
 }
 
-func (m *Modem) TtyWriteStrAsync(s string) {
-	m.Lock()
-	defer m.Unlock()
-	if m.st != StatusConnected {
-		m.TtyWriteStr(s)
+func (m *Modem) checkLock() {
+	if m.TryLock() {
+		panic("Modem lock not held")
 	}
 }
 
-func (m *Modem) TtyWriteStr(s string) {
+func (m *Modem) ttyWriteStr(s string) {
 	fmt.Fprint(m.tty, s)
 }
 
-func (m *Modem) Cr() string {
+func (m *Modem) TtyWriteStr(s string) {
+	m.checkLock()
+	m.ttyWriteStr(s)
+}
+
+func (m *Modem) TtyWriteStrSync(s string) {
+	m.Lock()
+	defer m.Unlock()
+	m.ttyWriteStr(s)
+}
+
+func (m *Modem) cr() string {
 	if m.shortForm {
 		return "\r"
 	} else {
 		return "\r\n"
 	}
+}
+
+func (m *Modem) Cr() string {
+	m.checkLock()
+	return m.cr()
+}
+
+func (m *Modem) CrSync() string {
+	m.Lock()
+	defer m.Unlock()
+	return m.cr()
 }
 
 func (m *Modem) printRetCode(ret CmdReturn) {
@@ -152,13 +178,13 @@ func (m *Modem) printRetCode(ret CmdReturn) {
 			retStr = "NO ANSWER"
 		}
 	}
-	m.TtyWriteStr(m.Cr() + retStr + m.Cr())
+	m.ttyWriteStr(m.cr() + retStr + m.cr())
 }
 
-func (m *Modem) setStatus(status ModemStatus) error {
+func (m *Modem) setStatus(status ModemStatus) {
 	prevStatus := m.st
 	if prevStatus == StatusClosed {
-		return ErrInvalidStateTransition
+		panic(ErrInvalidStateTransition)
 	}
 	switch status {
 	case StatusIdle:
@@ -172,35 +198,43 @@ func (m *Modem) setStatus(status ModemStatus) error {
 
 	case StatusConnected:
 		if prevStatus != StatusDialing && prevStatus != StatusRinging && prevStatus != StatusConnectedCmd {
-			return ErrInvalidStateTransition
+			panic(ErrInvalidStateTransition)
 		}
 		m.printRetCode(RetCodeConnect)
 	case StatusConnectedCmd:
 		if prevStatus != StatusConnected {
-			return ErrInvalidStateTransition
+			panic(ErrInvalidStateTransition)
 		}
 		m.printRetCode(RetCodeOk)
 	case StatusDialing:
 		if prevStatus != StatusIdle {
-			return ErrInvalidStateTransition
+			panic(ErrInvalidStateTransition)
 		}
 	case StatusRinging:
 		if prevStatus != StatusIdle {
-			return ErrInvalidStateTransition
+			panic(ErrInvalidStateTransition)
 		}
 	}
+	m.stCtxCancel()
+	m.stCtx, m.stCtxCancel = context.WithCancel(m.ctx)
 	m.st = status
 	fmt.Printf("Modem status transition: %v -> %v\n", prevStatus, status)
-	return nil
 }
 
 func (m *Modem) status() ModemStatus {
 	return m.st
 }
 
+// Status returns the current status of the modem. Modem lock must be held.
 func (m *Modem) Status() ModemStatus {
-	m.RLock()
-	defer m.RUnlock()
+	m.checkLock()
+	return m.status()
+}
+
+// StatusSync returns the current status of the modem. Modem lock is acquired and released.
+func (m *Modem) StatusSync() ModemStatus {
+	m.Lock()
+	defer m.Unlock()
 	return m.status()
 }
 
@@ -210,27 +244,69 @@ func (m *Modem) close() {
 	m.tty.Close()
 }
 
+// Close closes the modem. Modem lock must be held.
 func (m *Modem) Close() {
+	m.checkLock()
 	m.close()
 }
 
-func (m *Modem) IncomingCall(conn io.ReadWriteCloser) error {
+// CloseSync closes the modem. Modem lock is acquired and released.
+func (m *Modem) CloseSync() {
 	m.Lock()
 	defer m.Unlock()
+	m.close()
+}
+
+func (m *Modem) incomingCall(conn io.ReadWriteCloser) error {
 	if m.status() != StatusIdle {
 		return ErrModemBusy
 	}
-	err := m.setStatus(StatusRinging)
-	if err != nil {
-		return err
-	}
+	m.setStatus(StatusRinging)
 	m.conn = conn
 	return nil
 }
 
-func (m *Modem) processCommand(cmdChar string, cmdNum string, cmdAssign bool, cmdQuery bool, cmdAssignVal string) CmdReturn {
-	fmt.Printf("\r\nCommand with params: cmd:%s num:%s assign:%v query:%v val:%s\n", cmdChar, cmdNum, cmdAssign, cmdQuery, cmdAssignVal)
+// IncomingCall simulates an incoming call. Modem lock must be held.
+func (m *Modem) IncomingCall(conn io.ReadWriteCloser) error {
+	m.checkLock()
+	return m.incomingCall(conn)
+}
 
+// IncomingCallSync simulates an incoming call. Modem lock is acquired and released.
+func (m *Modem) IncomingCallSync(conn io.ReadWriteCloser) error {
+	m.Lock()
+	defer m.Unlock()
+	return m.incomingCall(conn)
+}
+
+func (m *Modem) processDialing(ctx context.Context, number string) {
+	if ctx.Err() != nil {
+		return
+	}
+	conn, err := m.outgoingCall(m, number)
+	m.Lock()
+	defer m.Unlock()
+	if ctx.Err() != nil {
+		if err == nil {
+			conn.Close()
+		}
+		return
+	}
+	if err != nil {
+		m.setStatus(StatusIdle)
+		return
+	}
+	m.conn = conn
+	m.setStatus(StatusConnected)
+}
+
+func (m *Modem) processCommand(cmdChar string, cmdNum string, cmdAssign bool, cmdQuery bool, cmdAssignVal string) CmdReturn {
+	if m.commandHook != nil {
+		r := m.commandHook(m, cmdChar, cmdNum, cmdAssign, cmdQuery, cmdAssignVal)
+		if r != RetCodeSkip {
+			return r
+		}
+	}
 	switch cmdChar {
 	case "S":
 		r, _ := strconv.Atoi(cmdNum)
@@ -247,7 +323,7 @@ func (m *Modem) processCommand(cmdChar string, cmdNum string, cmdAssign bool, cm
 		}
 		if cmdQuery {
 			v := m.sregs[byte(r)]
-			m.TtyWriteStr(fmt.Sprintf(m.Cr()+"%03d\r\n", v))
+			m.ttyWriteStr(fmt.Sprintf(m.cr()+"%03d\r\n", v))
 			return RetCodeOk
 		}
 	case "E":
@@ -275,20 +351,8 @@ func (m *Modem) processCommand(cmdChar string, cmdNum string, cmdAssign bool, cm
 			return RetCodeError
 		}
 		if m.outgoingCall != nil {
-			err := m.setStatus(StatusDialing)
-			if err != nil {
-				return RetCodeError
-			}
-			conn, err := m.outgoingCall(m, cmdAssignVal)
-			if err != nil {
-				m.setStatus(StatusIdle)
-				return RetCodeSilent
-			}
-			m.conn = conn
-			err = m.setStatus(StatusConnected)
-			if err != nil {
-				return RetCodeError
-			}
+			m.setStatus(StatusDialing)
+			go m.processDialing(m.stCtx, cmdAssignVal)
 			return RetCodeSilent
 		}
 		return RetCodeNoCarrier
@@ -299,34 +363,27 @@ func (m *Modem) processCommand(cmdChar string, cmdNum string, cmdAssign bool, cm
 		if m.status() != StatusRinging {
 			return RetCodeError
 		}
-		err := m.setStatus(StatusConnected)
-		if err != nil {
-			return RetCodeError
-		}
+		m.setStatus(StatusConnected)
 		return RetCodeSilent
 	case "H":
 		if m.status() == StatusConnected || m.status() == StatusConnectedCmd {
-			err := m.setStatus(StatusIdle)
-			if err != nil {
-				return RetCodeError
-			}
+			m.setStatus(StatusIdle)
 			return RetCodeSilent
 		}
 	case "O":
 		if m.status() != StatusConnectedCmd {
 			return RetCodeError
 		}
-		err := m.setStatus(StatusConnected)
-		if err != nil {
-			return RetCodeError
-		}
+		m.setStatus(StatusConnected)
 		return RetCodeSilent
 	}
 	return RetCodeOk
 }
 
-func (m *Modem) processAtCommand(cmd string) {
-	fmt.Printf("\r\nAT command received: \"%s\"\r\n", cmd)
+func (m *Modem) processAtCommand(cmd string) CmdReturn {
+	if m.status() != StatusIdle && m.status() != StatusConnectedCmd {
+		return RetCodeError
+	}
 	cmdBuf := bytes.NewBufferString(cmd)
 	cmdRet := RetCodeOk
 	e := false
@@ -433,7 +490,18 @@ func (m *Modem) processAtCommand(cmd string) {
 	if e {
 		cmdRet = RetCodeError
 	}
-	m.printRetCode(cmdRet)
+	return cmdRet
+}
+
+func (m *Modem) ProcessAtCommand(cmd string) CmdReturn {
+	m.checkLock()
+	return m.processAtCommand(cmd)
+}
+
+func (m *Modem) ProcessAtCommandSync(cmd string) CmdReturn {
+	m.Lock()
+	defer m.Unlock()
+	return m.processAtCommand(cmd)
 }
 
 func (m *Modem) ttyReadTask() {
@@ -453,10 +521,16 @@ func (m *Modem) ttyReadTask() {
 		if err != nil || n == 0 {
 			break
 		}
+
 		if m.status() == StatusConnected { // online mode pass-through
 			if m.conn != nil {
 				m.conn.Write(byteBuff)
 			}
+			continue
+		}
+
+		if m.status() == StatusDialing {
+			m.setStatus(StatusIdle)
 			continue
 		}
 
@@ -470,7 +544,9 @@ func (m *Modem) ttyReadTask() {
 			}
 			if aFlag && byteBuff[0] == '/' {
 				aFlag = false
-				m.processAtCommand(lastCmd)
+				m.ttyWriteStr("\r")
+				r := m.processAtCommand(lastCmd)
+				m.printRetCode(r)
 				continue
 			}
 			if aFlag && bytes.ToUpper(byteBuff)[0] == 'T' {
@@ -483,14 +559,16 @@ func (m *Modem) ttyReadTask() {
 			if byteBuff[0] == 0x7f {
 				if buffer.Len() > 0 {
 					buffer.Truncate(buffer.Len() - 1)
-					m.TtyWriteStr("\x1b[D \x1b[D")
+					m.ttyWriteStr("\x1b[D \x1b[D")
 				}
 				continue
 			}
 			if byteBuff[0] == '\r' {
 				atFlag = false
 				lastCmd = buffer.String()
-				m.processAtCommand(lastCmd)
+				m.ttyWriteStr("\r")
+				r := m.processAtCommand(lastCmd)
+				m.printRetCode(r)
 				buffer.Reset()
 				continue
 			}
@@ -520,11 +598,14 @@ func NewModem(ctx context.Context, config *ModemConfig) (*Modem, error) {
 		cancel:       modemCancel,
 		st:           StatusIdle,
 		outgoingCall: config.OutgoingCall,
+		commandHook:  config.CommandHook,
 		tty:          config.TTY,
 		connectStr:   config.ConnectStr,
 		echo:         true,
 		sregs:        make(map[byte]byte),
 	}
+
+	m.stCtx, m.stCtxCancel = context.WithCancel(ctx)
 
 	if m.connectStr == "" {
 		m.connectStr = "CONNECT"

@@ -16,7 +16,13 @@ var (
 
 func outGoingCall(m *vm.Modem, number string) (io.ReadWriteCloser, error) {
 	fmt.Printf("Dialing %s\n", number)
+	time.Sleep(5 * time.Second)
 	return nil, vm.ErrNoCarrier
+}
+
+func commandHook(_ *vm.Modem, cmdChar string, cmdNum string, cmdAssign bool, cmdQuery bool, cmdAssignVal string) vm.CmdReturn {
+	fmt.Printf("\r\nCommand with params: cmd:%s num:%s assign:%v query:%v val:%s\n", cmdChar, cmdNum, cmdAssign, cmdQuery, cmdAssignVal)
+	return vm.RetCodeSkip
 }
 
 func main() {
@@ -29,6 +35,7 @@ func main() {
 
 	m, err := vm.NewModem(context.Background(), &vm.ModemConfig{
 		OutgoingCall: outGoingCall,
+		CommandHook:  commandHook,
 		TTY:          cmdTTY,
 	})
 
@@ -36,7 +43,7 @@ func main() {
 		panic(err)
 	}
 	defer m.Close()
-	fmt.Printf("Modem status: %v\n", m.Status())
+	fmt.Printf("Modem status: %v\n", m.StatusSync())
 	for {
 		time.Sleep(1 * time.Second)
 	}
