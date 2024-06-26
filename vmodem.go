@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 var (
@@ -60,6 +61,7 @@ const (
 	RetCodeNoDialtone
 	RetCodeBusy
 	RetCodeNoAnswer
+	RetCodeRing
 	RetCodeSkip
 )
 
@@ -78,6 +80,9 @@ type Modem struct {
 	sregs        map[byte]byte
 	echo         bool
 	shortForm    bool
+	quietMode    bool
+	ringCount    int
+	ringMax      int
 }
 
 type OutgoingCallType func(m *Modem, number string) (io.ReadWriteCloser, error)
@@ -88,6 +93,7 @@ type ModemConfig struct {
 	CommandHook  CommandHookType
 	TTY          io.ReadWriteCloser
 	ConnectStr   string
+	RingMax      int
 }
 
 func checkValidCmdChar(b byte) bool {
@@ -159,6 +165,8 @@ func (m *Modem) printRetCode(ret CmdReturn) {
 			retStr = "7"
 		case RetCodeNoAnswer:
 			retStr = "8"
+		case RetCodeRing:
+			retStr = "2"
 		}
 	} else {
 		switch ret {
@@ -176,9 +184,13 @@ func (m *Modem) printRetCode(ret CmdReturn) {
 			retStr = "BUSY"
 		case RetCodeNoAnswer:
 			retStr = "NO ANSWER"
+		case RetCodeRing:
+			retStr = "RING"
 		}
 	}
-	m.ttyWriteStr(m.cr() + retStr + m.cr())
+	if !m.quietMode {
+		m.ttyWriteStr(m.cr() + retStr + m.cr())
+	}
 }
 
 func (m *Modem) setStatus(status ModemStatus) {
@@ -257,12 +269,40 @@ func (m *Modem) CloseSync() {
 	m.close()
 }
 
+func (m *Modem) ringer(ctx context.Context) {
+	m.Lock()
+	for {
+		if ctx.Err() != nil {
+			break
+		}
+		m.ringCount++
+		if m.ringCount > m.ringMax {
+			m.setStatus(StatusIdle)
+			break
+		}
+		if m.ringCount == int(m.sregs[0]) {
+			m.setStatus(StatusConnected)
+			break
+		}
+		m.printRetCode(RetCodeRing)
+		m.Unlock()
+		select {
+		case <-ctx.Done():
+		case <-time.After(1 * time.Second):
+		}
+		m.Lock()
+	}
+	m.ringCount = 0
+	m.Unlock()
+}
+
 func (m *Modem) incomingCall(conn io.ReadWriteCloser) error {
 	if m.status() != StatusIdle {
 		return ErrModemBusy
 	}
 	m.setStatus(StatusRinging)
 	m.conn = conn
+	go m.ringer(m.stCtx)
 	return nil
 }
 
@@ -376,6 +416,21 @@ func (m *Modem) processCommand(cmdChar string, cmdNum string, cmdAssign bool, cm
 		}
 		m.setStatus(StatusConnected)
 		return RetCodeSilent
+	case "Q":
+		n, _ := strconv.Atoi(cmdNum)
+		switch n {
+		case 0:
+			m.quietMode = false
+		case 1:
+			m.quietMode = true
+		default:
+			return RetCodeError
+		}
+	case "&F", "Z":
+		m.sregs[0] = 0
+		m.echo = true
+		m.shortForm = false
+		m.quietMode = false
 	}
 	return RetCodeOk
 }
@@ -544,7 +599,9 @@ func (m *Modem) ttyReadTask() {
 			}
 			if aFlag && byteBuff[0] == '/' {
 				aFlag = false
-				m.ttyWriteStr("\r")
+				if m.echo {
+					m.ttyWriteStr("\r")
+				}
 				r := m.processAtCommand(lastCmd)
 				m.printRetCode(r)
 				continue
@@ -559,14 +616,18 @@ func (m *Modem) ttyReadTask() {
 			if byteBuff[0] == 0x7f {
 				if buffer.Len() > 0 {
 					buffer.Truncate(buffer.Len() - 1)
-					m.ttyWriteStr("\x1b[D \x1b[D")
+					if m.echo {
+						m.ttyWriteStr("\x1b[D \x1b[D")
+					}
 				}
 				continue
 			}
 			if byteBuff[0] == '\r' {
 				atFlag = false
 				lastCmd = buffer.String()
-				m.ttyWriteStr("\r")
+				if m.echo {
+					m.ttyWriteStr("\r")
+				}
 				r := m.processAtCommand(lastCmd)
 				m.printRetCode(r)
 				buffer.Reset()
@@ -601,6 +662,7 @@ func NewModem(ctx context.Context, config *ModemConfig) (*Modem, error) {
 		commandHook:  config.CommandHook,
 		tty:          config.TTY,
 		connectStr:   config.ConnectStr,
+		ringMax:      config.RingMax,
 		echo:         true,
 		sregs:        make(map[byte]byte),
 	}
@@ -609,6 +671,10 @@ func NewModem(ctx context.Context, config *ModemConfig) (*Modem, error) {
 
 	if m.connectStr == "" {
 		m.connectStr = "CONNECT"
+	}
+
+	if m.ringMax == 0 {
+		m.ringMax = 5
 	}
 
 	go m.ttyReadTask()
