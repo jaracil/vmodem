@@ -67,8 +67,6 @@ const (
 
 type Modem struct {
 	sync.Mutex
-	ctx          context.Context
-	cancel       context.CancelFunc
 	st           ModemStatus
 	stCtx        context.Context
 	stCtxCancel  context.CancelFunc
@@ -195,10 +193,16 @@ func (m *Modem) printRetCode(ret CmdReturn) {
 
 func (m *Modem) setStatus(status ModemStatus) {
 	prevStatus := m.st
+	if prevStatus == status {
+		return
+	}
 	if prevStatus == StatusClosed {
 		panic(ErrInvalidStateTransition)
 	}
-	switch status {
+	m.stCtxCancel()
+	m.stCtx, m.stCtxCancel = context.WithCancel(context.Background())
+	m.st = status
+	switch m.st {
 	case StatusIdle:
 		if prevStatus == StatusConnected || prevStatus == StatusConnectedCmd || prevStatus == StatusDialing {
 			m.printRetCode(RetCodeNoCarrier)
@@ -213,6 +217,7 @@ func (m *Modem) setStatus(status ModemStatus) {
 			panic(ErrInvalidStateTransition)
 		}
 		m.printRetCode(RetCodeConnect)
+		go m.onlineTask(m.stCtx)
 	case StatusConnectedCmd:
 		if prevStatus != StatusConnected {
 			panic(ErrInvalidStateTransition)
@@ -226,10 +231,15 @@ func (m *Modem) setStatus(status ModemStatus) {
 		if prevStatus != StatusIdle {
 			panic(ErrInvalidStateTransition)
 		}
+		go m.ringer(m.stCtx)
+	case StatusClosed:
+		m.tty.Close()
+		if prevStatus == StatusConnected || prevStatus == StatusConnectedCmd || prevStatus == StatusRinging {
+			m.conn.Close()
+			m.conn = nil
+		}
 	}
-	m.stCtxCancel()
-	m.stCtx, m.stCtxCancel = context.WithCancel(m.ctx)
-	m.st = status
+
 	fmt.Printf("Modem status transition: %v -> %v\n", prevStatus, status)
 }
 
@@ -252,8 +262,6 @@ func (m *Modem) StatusSync() ModemStatus {
 
 func (m *Modem) close() {
 	m.setStatus(StatusClosed)
-	m.cancel()
-	m.tty.Close()
 }
 
 // Close closes the modem. Modem lock must be held.
@@ -271,24 +279,24 @@ func (m *Modem) CloseSync() {
 
 func (m *Modem) ringer(ctx context.Context) {
 	m.Lock()
-	for {
+	for m.status() == StatusRinging {
 		if ctx.Err() != nil {
 			break
 		}
 		m.ringCount++
+		m.printRetCode(RetCodeRing)
 		if m.ringCount > m.ringMax {
 			m.setStatus(StatusIdle)
 			break
 		}
-		if m.ringCount == int(m.sregs[0]) {
+		if m.sregs[0] > 0 && m.ringCount >= int(m.sregs[0]) {
 			m.setStatus(StatusConnected)
 			break
 		}
-		m.printRetCode(RetCodeRing)
 		m.Unlock()
 		select {
 		case <-ctx.Done():
-		case <-time.After(1 * time.Second):
+		case <-time.After(2 * time.Second):
 		}
 		m.Lock()
 	}
@@ -296,13 +304,31 @@ func (m *Modem) ringer(ctx context.Context) {
 	m.Unlock()
 }
 
+func (m *Modem) onlineTask(ctx context.Context) {
+	buff := make([]byte, 128)
+	m.Lock()
+	for ctx.Err() == nil {
+		m.Unlock()
+		n, err := m.conn.Read(buff)
+		m.Lock()
+		if ctx.Err() != nil {
+			break
+		}
+		if err != nil || n == 0 {
+			m.setStatus(StatusIdle)
+			break
+		}
+		m.tty.Write(buff[:n])
+	}
+	m.Unlock()
+}
+
 func (m *Modem) incomingCall(conn io.ReadWriteCloser) error {
 	if m.status() != StatusIdle {
 		return ErrModemBusy
 	}
-	m.setStatus(StatusRinging)
 	m.conn = conn
-	go m.ringer(m.stCtx)
+	m.setStatus(StatusRinging)
 	return nil
 }
 
@@ -436,7 +462,7 @@ func (m *Modem) processCommand(cmdChar string, cmdNum string, cmdAssign bool, cm
 }
 
 func (m *Modem) processAtCommand(cmd string) CmdReturn {
-	if m.status() != StatusIdle && m.status() != StatusConnectedCmd {
+	if m.status() != StatusIdle && m.status() != StatusConnectedCmd && m.status() != StatusRinging {
 		return RetCodeError
 	}
 	cmdBuf := bytes.NewBufferString(cmd)
@@ -565,15 +591,21 @@ func (m *Modem) ttyReadTask() {
 	buffer := *bytes.NewBuffer(nil)
 	byteBuff := make([]byte, 1)
 	lastCmd := ""
+	plusCnt := 0
+	lastPlus := time.Time{}
+	lastNotPlus := time.Time{}
+
 	m.Lock()
-	for {
-		if m.ctx.Err() != nil {
-			break
-		}
+	for m.status() != StatusClosed {
 		m.Unlock()
 		n, err := m.tty.Read(byteBuff)
 		m.Lock()
+		if m.status() == StatusClosed {
+			break
+		}
+
 		if err != nil || n == 0 {
+			m.setStatus(StatusClosed)
 			break
 		}
 
@@ -581,7 +613,36 @@ func (m *Modem) ttyReadTask() {
 			if m.conn != nil {
 				m.conn.Write(byteBuff)
 			}
+			if byteBuff[0] == '+' {
+				if time.Since(lastNotPlus) < 300*time.Millisecond {
+					plusCnt = 0
+					lastNotPlus = time.Now()
+					continue
+				}
+
+				if time.Since(lastPlus) > 300*time.Millisecond {
+					plusCnt = 0
+				}
+				plusCnt++
+				lastPlus = time.Now()
+				if plusCnt == 3 {
+					go func(ctx context.Context) {
+						time.Sleep(1 * time.Second)
+						m.Lock()
+						defer m.Unlock()
+						if ctx.Err() != nil || plusCnt != 3 {
+							return
+						}
+						m.setStatus(StatusConnectedCmd)
+					}(m.stCtx)
+				}
+			} else {
+				plusCnt = 0
+				lastNotPlus = time.Now()
+			}
 			continue
+		} else {
+			plusCnt = 0
 		}
 
 		if m.status() == StatusDialing {
@@ -644,7 +705,7 @@ func (m *Modem) ttyReadTask() {
 	m.Unlock()
 }
 
-func NewModem(ctx context.Context, config *ModemConfig) (*Modem, error) {
+func NewModem(config *ModemConfig) (*Modem, error) {
 	if config == nil {
 		return nil, ErrConfigRequired
 	}
@@ -653,10 +714,7 @@ func NewModem(ctx context.Context, config *ModemConfig) (*Modem, error) {
 		return nil, ErrConfigRequired
 	}
 
-	modemContext, modemCancel := context.WithCancel(ctx)
 	m := &Modem{
-		ctx:          modemContext,
-		cancel:       modemCancel,
 		st:           StatusIdle,
 		outgoingCall: config.OutgoingCall,
 		commandHook:  config.CommandHook,
@@ -667,7 +725,7 @@ func NewModem(ctx context.Context, config *ModemConfig) (*Modem, error) {
 		sregs:        make(map[byte]byte),
 	}
 
-	m.stCtx, m.stCtxCancel = context.WithCancel(ctx)
+	m.stCtx, m.stCtxCancel = context.WithCancel(context.Background())
 
 	if m.connectStr == "" {
 		m.connectStr = "CONNECT"
