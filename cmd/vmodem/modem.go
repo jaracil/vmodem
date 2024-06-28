@@ -22,6 +22,7 @@ type Options struct {
 	StartNum   int    `short:"s" long:"start" description:"Start number for TTYs" default:"0"`
 	NumTTYs    int    `short:"n" long:"num" description:"Number of TTYs to create" default:"1"`
 	RingMax    int    `short:"r" long:"ring" description:"Max number of rings before hangup" default:"10"`
+	NoListen   bool   `long:"nolisten" description:"Do not listen for incoming calls"`
 }
 
 var (
@@ -134,7 +135,9 @@ func main() {
 		}
 	}
 
-	go listenTask()
+	if !options.NoListen {
+		go listenTask()
+	}
 
 	<-ctx.Done()
 	if listener != nil {
