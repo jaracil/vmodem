@@ -67,31 +67,36 @@ const (
 
 type Modem struct {
 	sync.Mutex
-	st           ModemStatus
-	stCtx        context.Context
-	stCtxCancel  context.CancelFunc
-	tty          io.ReadWriteCloser
-	conn         io.ReadWriteCloser
-	outgoingCall OutgoingCallType
-	commandHook  CommandHookType
-	connectStr   string
-	sregs        map[byte]byte
-	echo         bool
-	shortForm    bool
-	quietMode    bool
-	ringCount    int
-	ringMax      int
+	st               ModemStatus
+	stCtx            context.Context
+	stCtxCancel      context.CancelFunc
+	id               string
+	tty              io.ReadWriteCloser
+	conn             io.ReadWriteCloser
+	statusTransition StatusTransitionType
+	outgoingCall     OutgoingCallType
+	commandHook      CommandHookType
+	connectStr       string
+	sregs            map[byte]byte
+	echo             bool
+	shortForm        bool
+	quietMode        bool
+	ringCount        int
+	ringMax          int
 }
 
+type StatusTransitionType func(m *Modem, prevStatus ModemStatus, newStatus ModemStatus)
 type OutgoingCallType func(m *Modem, number string) (io.ReadWriteCloser, error)
 type CommandHookType func(m *Modem, cmdChar string, cmdNum string, cmdAssign bool, cmdQuery bool, cmdAssignVal string) CmdReturn
 
 type ModemConfig struct {
-	OutgoingCall OutgoingCallType
-	CommandHook  CommandHookType
-	TTY          io.ReadWriteCloser
-	ConnectStr   string
-	RingMax      int
+	Id               string
+	OutgoingCall     OutgoingCallType
+	CommandHook      CommandHookType
+	StatusTransition StatusTransitionType
+	TTY              io.ReadWriteCloser
+	ConnectStr       string
+	RingMax          int
 }
 
 func checkValidCmdChar(b byte) bool {
@@ -121,6 +126,10 @@ func (m *Modem) TtyWriteStrSync(s string) {
 	m.Lock()
 	defer m.Unlock()
 	m.ttyWriteStr(s)
+}
+
+func (m *Modem) Id() string {
+	return m.id
 }
 
 func (m *Modem) cr() string {
@@ -239,8 +248,9 @@ func (m *Modem) setStatus(status ModemStatus) {
 			m.conn = nil
 		}
 	}
-
-	fmt.Printf("Modem status transition: %v -> %v\n", prevStatus, status)
+	if m.statusTransition != nil {
+		m.statusTransition(m, prevStatus, status)
+	}
 }
 
 func (m *Modem) status() ModemStatus {
@@ -715,14 +725,16 @@ func NewModem(config *ModemConfig) (*Modem, error) {
 	}
 
 	m := &Modem{
-		st:           StatusIdle,
-		outgoingCall: config.OutgoingCall,
-		commandHook:  config.CommandHook,
-		tty:          config.TTY,
-		connectStr:   config.ConnectStr,
-		ringMax:      config.RingMax,
-		echo:         true,
-		sregs:        make(map[byte]byte),
+		st:               StatusIdle,
+		id:               config.Id,
+		outgoingCall:     config.OutgoingCall,
+		commandHook:      config.CommandHook,
+		statusTransition: config.StatusTransition,
+		tty:              config.TTY,
+		connectStr:       config.ConnectStr,
+		ringMax:          config.RingMax,
+		echo:             true,
+		sregs:            make(map[byte]byte),
 	}
 
 	m.stCtx, m.stCtxCancel = context.WithCancel(context.Background())

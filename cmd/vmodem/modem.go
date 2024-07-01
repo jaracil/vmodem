@@ -34,14 +34,24 @@ var (
 )
 
 func outGoingCall(m *vm.Modem, number string) (io.ReadWriteCloser, error) {
-	fmt.Printf("Dialing %s\n", number)
+	if len(options.Verbose) > 0 {
+		fmt.Printf("%s: Dialing %s\n", m.Id(), number)
+	}
 	time.Sleep(5 * time.Second)
 	return nil, vm.ErrNoCarrier
 }
 
-func commandHook(_ *vm.Modem, cmdChar string, cmdNum string, cmdAssign bool, cmdQuery bool, cmdAssignVal string) vm.CmdReturn {
-	fmt.Printf("\r\nCommand with params: cmd:%s num:%s assign:%v query:%v val:%s\n", cmdChar, cmdNum, cmdAssign, cmdQuery, cmdAssignVal)
+func commandHook(m *vm.Modem, cmdChar string, cmdNum string, cmdAssign bool, cmdQuery bool, cmdAssignVal string) vm.CmdReturn {
+	if len(options.Verbose) > 1 {
+		fmt.Printf("%s: Command with params: cmd:%s num:%s assign:%v query:%v val:%s\n", m.Id(), cmdChar, cmdNum, cmdAssign, cmdQuery, cmdAssignVal)
+	}
 	return vm.RetCodeSkip
+}
+
+func statusTransition(m *vm.Modem, oldStatus vm.ModemStatus, newStatus vm.ModemStatus) {
+	if len(options.Verbose) > 0 {
+		fmt.Printf("%s: Status transition %v -> %v\n", m.Id(), oldStatus, newStatus)
+	}
 }
 
 func cleanTTYs() {
@@ -68,7 +78,6 @@ func listenTask() {
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error accepting connection: %v\n", err)
 			cancel()
 			break
 		}
@@ -118,10 +127,12 @@ func main() {
 			os.Exit(1)
 		}
 		m, err := vm.NewModem(&vm.ModemConfig{
-			OutgoingCall: outGoingCall,
-			CommandHook:  commandHook,
-			TTY:          tty,
-			RingMax:      options.RingMax,
+			Id:               fmt.Sprintf("tty%d", options.StartNum+i),
+			OutgoingCall:     outGoingCall,
+			CommandHook:      commandHook,
+			StatusTransition: statusTransition,
+			TTY:              tty,
+			RingMax:          options.RingMax,
 		})
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error creating modem: %v\n", err)
@@ -132,6 +143,9 @@ func main() {
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error creating symlink: %v\n", err)
 			os.Exit(1)
+		}
+		if len(options.Verbose) > 0 {
+			fmt.Printf("%s: Created and listen on %s/tty%d\n", m.Id(), options.TtyPath, options.StartNum+i)
 		}
 	}
 
