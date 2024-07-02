@@ -7,30 +7,36 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/aymanbagabas/go-pty"
 	vm "github.com/jaracil/vmodem"
 	"github.com/jessevdk/go-flags"
+	"go.bug.st/serial"
 )
 
 type Options struct {
-	Verbose    []bool `short:"v" long:"verbose" description:"Show verbose debug information"`
-	ListenAddr string `short:"a" long:"addr" description:"Listen address" default:"0.0.0.0:2020"`
-	TtyPath    string `short:"t" long:"tty" description:"path for TTYs creation" default:"/tmp/vmodem"`
-	StartNum   int    `short:"s" long:"start" description:"Start number for TTYs" default:"0"`
-	NumTTYs    int    `short:"n" long:"num" description:"Number of TTYs to create" default:"1"`
-	RingMax    int    `short:"r" long:"ring" description:"Max number of rings before hangup" default:"10"`
-	NoListen   bool   `long:"nolisten" description:"Do not listen for incoming calls"`
+	Verbose    []bool   `short:"v" long:"verbose" description:"Show verbose debug information"`
+	ListenAddr string   `short:"a" long:"addr" description:"Listen address" default:"0.0.0.0:2020"`
+	TtyPath    string   `short:"t" long:"tty" description:"path for TTYs creation" default:"/tmp/vmodem"`
+	StartNum   int      `short:"s" long:"start" description:"Start number for TTYs" default:"0"`
+	NumTTYs    int      `short:"n" long:"num" description:"Number of TTYs to create" default:"1"`
+	RingMax    int      `short:"r" long:"ring" description:"Max number of rings before hangup" default:"10"`
+	NoListen   bool     `long:"nolisten" description:"Do not listen for incoming calls"`
+	Attach     []string `short:"A" long:"attach" description:"Attach two TTY's. Format: tty1:tty2:speed,data_bits,parity,stop_bits"`
 }
 
 var (
-	ctx      context.Context
-	cancel   context.CancelFunc
-	options  Options
-	modems   []*vm.Modem
-	listener net.Listener
+	ctx       context.Context
+	cancel    context.CancelFunc
+	options   Options
+	modems    []*vm.Modem
+	attached1 []serial.Port
+	attached2 []serial.Port
+	listener  net.Listener
 )
 
 func outGoingCall(m *vm.Modem, number string) (io.ReadWriteCloser, error) {
@@ -66,6 +72,15 @@ func cleanModems() {
 	}
 }
 
+func cleanAttached() {
+	for _, port := range attached1 {
+		port.Close()
+	}
+	for _, port := range attached2 {
+		port.Close()
+	}
+}
+
 func listenTask() {
 	// TCP server
 	var err error
@@ -94,6 +109,102 @@ func listenTask() {
 			fmt.Fprintf(os.Stderr, "No free modems for incomming call\n")
 		}
 	}
+}
+
+func linkPorts(port1, port2 serial.Port) {
+	go func() {
+		io.Copy(port1, port2)
+		if ctx.Err() == nil {
+			fmt.Fprintf(os.Stderr, "Broken tty attach\n")
+			cancel()
+		}
+
+	}()
+	go func() {
+		io.Copy(port2, port1)
+		if ctx.Err() == nil {
+			fmt.Fprintf(os.Stderr, "Broken tty attach\n")
+			cancel()
+		}
+	}()
+}
+
+func attachTTY(cfgStr string) error {
+
+	params := strings.Split(cfgStr, ":")
+	if len(params) < 2 {
+		return fmt.Errorf("invalid attach string")
+	}
+
+	serialPort1 := params[0]
+	serialPort2 := params[1]
+	serialParams := []string{}
+	if len(params) > 2 {
+		serialParams = strings.Split(params[2], ",")
+	}
+	serialSpeed := 9600
+	serialDataBits := 8
+	serialParity := serial.NoParity
+	serialStopBits := serial.OneStopBit
+	var err error
+
+	if len(serialParams) >= 1 {
+		serialSpeed, err = strconv.Atoi(serialParams[0])
+		if err != nil {
+			return fmt.Errorf("invalid speed")
+		}
+	}
+	if len(serialParams) >= 2 {
+		serialDataBits, err = strconv.Atoi(serialParams[1])
+		if err != nil {
+			return fmt.Errorf("invalid data bits")
+		}
+	}
+	if len(serialParams) >= 3 {
+		switch strings.ToUpper(serialParams[2]) {
+		case "N":
+			serialParity = serial.NoParity
+		case "E":
+			serialParity = serial.EvenParity
+		case "O":
+			serialParity = serial.OddParity
+		default:
+			return fmt.Errorf("invalid parity")
+		}
+	}
+	if len(serialParams) >= 4 {
+		switch serialParams[3] {
+		case "1":
+			serialStopBits = serial.OneStopBit
+		case "2":
+			serialStopBits = serial.TwoStopBits
+		default:
+			return fmt.Errorf("invalid stop bits")
+		}
+	}
+
+	port1, err := serial.Open(serialPort1, &serial.Mode{
+		BaudRate: serialSpeed,
+		DataBits: serialDataBits,
+		Parity:   serialParity,
+		StopBits: serialStopBits,
+	})
+	if err != nil {
+		return fmt.Errorf("error opening external serial port: %v", err)
+	}
+	port2, err := serial.Open(serialPort2, &serial.Mode{
+		BaudRate: serialSpeed,
+		DataBits: serialDataBits,
+		Parity:   serialParity,
+		StopBits: serialStopBits,
+	})
+	if err != nil {
+		return fmt.Errorf("error opening local serial port: %v", err)
+	}
+	attached1 = append(attached1, port1)
+	attached2 = append(attached2, port2)
+	go linkPorts(port1, port2)
+	return nil
 }
 
 func main() {
@@ -149,6 +260,14 @@ func main() {
 		}
 	}
 
+	for _, attachStr := range options.Attach {
+		err := attachTTY(attachStr)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error attaching TTY: %v\n", err)
+			os.Exit(1)
+		}
+	}
+
 	if !options.NoListen {
 		go listenTask()
 	}
@@ -158,5 +277,6 @@ func main() {
 		listener.Close()
 	}
 	cleanTTYs()
+	cleanAttached()
 	cleanModems()
 }
