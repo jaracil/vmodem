@@ -77,6 +77,7 @@ type Modem struct {
 	outgoingCall     OutgoingCallType
 	commandHook      CommandHookType
 	connectStr       string
+	answerChar       string
 	sregs            map[byte]byte
 	echo             bool
 	shortForm        bool
@@ -97,6 +98,7 @@ type ModemConfig struct {
 	TTY              io.ReadWriteCloser
 	ConnectStr       string
 	RingMax          int
+	AnswerChar       string
 }
 
 func checkValidCmdChar(b byte) bool {
@@ -224,6 +226,9 @@ func (m *Modem) setStatus(status ModemStatus) {
 	case StatusConnected:
 		if prevStatus != StatusDialing && prevStatus != StatusRinging && prevStatus != StatusConnectedCmd {
 			panic(ErrInvalidStateTransition)
+		}
+		if prevStatus == StatusRinging && m.answerChar != "" {
+			m.conn.Write([]byte(m.answerChar[0:1]))
 		}
 		m.printRetCode(RetCodeConnect)
 		go m.onlineTask(m.stCtx)
@@ -359,16 +364,33 @@ func (m *Modem) processDialing(ctx context.Context, number string) {
 	if ctx.Err() != nil {
 		return
 	}
+	fail := false
+	transport := false
 	conn, err := m.outgoingCall(m, number)
+	if err != nil {
+		fail = true
+	} else {
+		transport = true
+	}
+	if m.answerChar != "" && transport {
+		buff := make([]byte, 1)
+		n, err := conn.Read(buff)
+		if err != nil || n != 1 || buff[0] != m.answerChar[0] {
+			fail = true
+		}
+	}
 	m.Lock()
 	defer m.Unlock()
 	if ctx.Err() != nil {
-		if err == nil {
+		if transport {
 			conn.Close()
 		}
 		return
 	}
-	if err != nil {
+	if fail {
+		if transport {
+			conn.Close()
+		}
 		m.setStatus(StatusIdle)
 		return
 	}
@@ -733,6 +755,7 @@ func NewModem(config *ModemConfig) (*Modem, error) {
 		tty:              config.TTY,
 		connectStr:       config.ConnectStr,
 		ringMax:          config.RingMax,
+		answerChar:       config.AnswerChar,
 		echo:             true,
 		sregs:            make(map[byte]byte),
 	}
