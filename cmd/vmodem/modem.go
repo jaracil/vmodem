@@ -28,8 +28,29 @@ type Options struct {
 	RingMax     int      `short:"r" long:"ring" description:"Max number of rings before hangup" default:"10"`
 	NoListen    bool     `long:"nolisten" description:"Do not listen for incoming calls"`
 	AnswerChar  string   `long:"answer-char" description:"sends this character when the call is answered"`
+	Command     []string `short:"C" long:"command" description:"Command hook. Format: regexp->response->result"`
 	Translate   []string `short:"T" long:"translate" description:"Translate phone number to host. Format: regexp->format"`
 	Attach      []string `short:"A" long:"attach" description:"Attach two TTY's. Format: tty1:tty2:speed,data_bits,parity,stop_bits"`
+}
+
+type Command struct {
+	ReStr  string
+	Output string
+	Result vm.RetCode
+	re     *regexp.Regexp
+}
+
+func NewCommand(reStr, format string, result vm.RetCode) (*Command, error) {
+	re, err := regexp.Compile(reStr)
+	if err != nil {
+		return nil, err
+	}
+	return &Command{
+		Output: format,
+		ReStr:  reStr,
+		Result: result,
+		re:     re,
+	}, nil
 }
 
 type NumToHost struct {
@@ -71,6 +92,7 @@ var (
 	attached2  []serial.Port
 	listener   net.Listener
 	numToHosts []*NumToHost
+	commands   []*Command
 )
 
 func findHost(num string) string {
@@ -104,9 +126,27 @@ func outGoingCall(m *vm.Modem, number string) (io.ReadWriteCloser, error) {
 	return nil, vm.ErrNoCarrier
 }
 
-func commandHook(m *vm.Modem, cmdChar string, cmdNum string, cmdAssign bool, cmdQuery bool, cmdAssignVal string) vm.CmdReturn {
+func commandHook(m *vm.Modem, cmdChar string, cmdNum string, cmdAssign bool, cmdQuery bool, cmdAssignVal string) vm.RetCode {
 	if len(options.Verbose) > 1 {
 		fmt.Printf("%s: Command with params: cmd:%s num:%s assign:%v query:%v val:%s\n", m.Id(), cmdChar, cmdNum, cmdAssign, cmdQuery, cmdAssignVal)
+	}
+	cmd := fmt.Sprintf("%s%s", cmdChar, cmdNum)
+	if cmdAssign {
+		cmd += "="
+	}
+	if cmdQuery {
+		cmd += "?"
+	}
+	if cmdAssignVal != "" {
+		cmd += cmdAssignVal
+	}
+	for _, c := range commands {
+		if c.re.MatchString(cmd) {
+			if c.Output != "" {
+				m.TtyWriteStr(fmt.Sprintf("\r\n%s\r\n", c.Output))
+			}
+			return c.Result
+		}
 	}
 	return vm.RetCodeSkip
 }
@@ -304,6 +344,27 @@ func phoneTranslations() {
 	}
 }
 
+func customCommands() {
+	for _, c := range options.Command {
+		parts := strings.Split(c, "->")
+		if len(parts) != 3 {
+			fmt.Fprintf(os.Stderr, "Invalid command: %s\n", c)
+			os.Exit(1)
+		}
+		cmdRet := vm.CmdReturnFromString(parts[2])
+		if cmdRet == vm.RetCodeUnknown {
+			fmt.Fprintf(os.Stderr, "Invalid command return: %s\n", parts[2])
+			os.Exit(1)
+		}
+		cmd, err := NewCommand(parts[0], parts[1], cmdRet)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error creating command: %v\n", err)
+			os.Exit(1)
+		}
+		commands = append(commands, cmd)
+	}
+}
+
 func main() {
 	ctx, cancel = context.WithCancel(context.Background())
 
@@ -329,6 +390,7 @@ func main() {
 	}()
 
 	phoneTranslations()
+	customCommands()
 
 	for i := 0; i < options.NumTTYs; i++ {
 		tty, err := pty.New()

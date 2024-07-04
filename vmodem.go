@@ -50,10 +50,10 @@ func (ms ModemStatus) String() string {
 	}
 }
 
-type CmdReturn int
+type RetCode int
 
 const (
-	RetCodeOk CmdReturn = iota
+	RetCodeOk RetCode = iota
 	RetCodeError
 	RetCodeSilent
 	RetCodeConnect
@@ -63,7 +63,31 @@ const (
 	RetCodeNoAnswer
 	RetCodeRing
 	RetCodeSkip
+	RetCodeUnknown
 )
+
+func CmdReturnFromString(s string) RetCode {
+	switch strings.ToUpper(s) {
+	case "OK":
+		return RetCodeOk
+	case "ERROR":
+		return RetCodeError
+	case "CONNECT":
+		return RetCodeConnect
+	case "NO CARRIER":
+		return RetCodeNoCarrier
+	case "NO DIALTONE":
+		return RetCodeNoDialtone
+	case "BUSY":
+		return RetCodeBusy
+	case "NO ANSWER":
+		return RetCodeNoAnswer
+	case "RING":
+		return RetCodeRing
+	default:
+		return RetCodeUnknown
+	}
+}
 
 type Modem struct {
 	sync.Mutex
@@ -88,7 +112,7 @@ type Modem struct {
 
 type StatusTransitionType func(m *Modem, prevStatus ModemStatus, newStatus ModemStatus)
 type OutgoingCallType func(m *Modem, number string) (io.ReadWriteCloser, error)
-type CommandHookType func(m *Modem, cmdChar string, cmdNum string, cmdAssign bool, cmdQuery bool, cmdAssignVal string) CmdReturn
+type CommandHookType func(m *Modem, cmdChar string, cmdNum string, cmdAssign bool, cmdQuery bool, cmdAssignVal string) RetCode
 
 type ModemConfig struct {
 	Id               string
@@ -153,7 +177,7 @@ func (m *Modem) CrSync() string {
 	return m.cr()
 }
 
-func (m *Modem) printRetCode(ret CmdReturn) {
+func (m *Modem) printRetCode(ret RetCode) {
 	if ret == RetCodeSilent {
 		return
 	}
@@ -398,7 +422,7 @@ func (m *Modem) processDialing(ctx context.Context, number string) {
 	m.setStatus(StatusConnected)
 }
 
-func (m *Modem) processCommand(cmdChar string, cmdNum string, cmdAssign bool, cmdQuery bool, cmdAssignVal string) CmdReturn {
+func (m *Modem) processCommand(cmdChar string, cmdNum string, cmdAssign bool, cmdQuery bool, cmdAssignVal string) RetCode {
 	if m.commandHook != nil {
 		r := m.commandHook(m, cmdChar, cmdNum, cmdAssign, cmdQuery, cmdAssignVal)
 		if r != RetCodeSkip {
@@ -493,7 +517,7 @@ func (m *Modem) processCommand(cmdChar string, cmdNum string, cmdAssign bool, cm
 	return RetCodeOk
 }
 
-func (m *Modem) processAtCommand(cmd string) CmdReturn {
+func (m *Modem) processAtCommand(cmd string) RetCode {
 	if m.status() != StatusIdle && m.status() != StatusConnectedCmd && m.status() != StatusRinging {
 		return RetCodeError
 	}
@@ -606,12 +630,12 @@ func (m *Modem) processAtCommand(cmd string) CmdReturn {
 	return cmdRet
 }
 
-func (m *Modem) ProcessAtCommand(cmd string) CmdReturn {
+func (m *Modem) ProcessAtCommand(cmd string) RetCode {
 	m.checkLock()
 	return m.processAtCommand(cmd)
 }
 
-func (m *Modem) ProcessAtCommandSync(cmd string) CmdReturn {
+func (m *Modem) ProcessAtCommandSync(cmd string) RetCode {
 	m.Lock()
 	defer m.Unlock()
 	return m.processAtCommand(cmd)
