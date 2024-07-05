@@ -433,7 +433,7 @@ func main() {
 	if !options.NoListen {
 		go listenTask()
 	}
-
+	fmt.Println("Vmodem started, press Ctrl+C to exit")
 	<-ctx.Done()
 	if listener != nil {
 		listener.Close()
