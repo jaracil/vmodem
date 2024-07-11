@@ -84,6 +84,10 @@ func CmdReturnFromString(s string) RetCode {
 		return RetCodeNoAnswer
 	case "RING":
 		return RetCodeRing
+	case "SILENT":
+		return RetCodeSilent
+	case "SKIP":
+		return RetCodeSkip
 	default:
 		return RetCodeUnknown
 	}
@@ -178,12 +182,11 @@ func (m *Modem) CrSync() string {
 }
 
 func (m *Modem) printRetCode(ret RetCode) {
-	if ret == RetCodeSilent {
-		return
-	}
 	retStr := ""
 	if m.shortForm {
 		switch ret {
+		case RetCodeSilent, RetCodeSkip:
+			return
 		case RetCodeOk:
 			retStr = "0"
 		case RetCodeError:
@@ -203,6 +206,8 @@ func (m *Modem) printRetCode(ret RetCode) {
 		}
 	} else {
 		switch ret {
+		case RetCodeSilent, RetCodeSkip:
+			return
 		case RetCodeOk:
 			retStr = "OK"
 		case RetCodeError:
