@@ -479,7 +479,12 @@ func (m *Modem) processCommand(cmdChar string, cmdNum string, cmdAssign bool, cm
 		}
 		if m.outgoingCall != nil {
 			m.setStatus(StatusDialing)
-			go m.processDialing(m.stCtx, cmdAssignVal)
+			number := strings.ToUpper(strings.TrimSpace(cmdAssignVal))
+			if len(number) > 0 && (number[0] == 'T' || number[0] == 'P') {
+				number = number[1:]
+				number = strings.TrimSpace(number)
+			}
+			go m.processDialing(m.stCtx, number)
 			return RetCodeSilent
 		}
 		return RetCodeNoCarrier
