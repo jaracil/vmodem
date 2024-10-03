@@ -602,8 +602,8 @@ func (m *Modem) processAtCommand(cmd string) RetCode {
 				}
 			}
 
-			if cmdChar == "" || cmdChar == "&" {
-				if b == '&' && cmdChar == "" && cmdBuf.Len() > 0 {
+			if cmdChar == "" || cmdChar == "&" || cmdChar == "%" {
+				if (b == '&' || b == '%') && cmdChar == "" && cmdBuf.Len() > 0 {
 					cmdChar += string(b)
 					continue
 				}
