@@ -11,26 +11,32 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/aymanbagabas/go-pty"
+	"github.com/jaracil/nagle"
 	vm "github.com/jaracil/vmodem"
 	"github.com/jessevdk/go-flags"
 	"go.bug.st/serial"
 )
 
 type Options struct {
-	Verbose     []bool   `short:"v" long:"verbose" description:"Show verbose debug information"`
-	ListenAddr  string   `short:"a" long:"addr" description:"Listen address" default:"0.0.0.0:2020"`
-	DefaultPort string   `short:"p" long:"port" description:"Default port for outgoing calls" default:"2020"`
-	TtyPath     string   `short:"t" long:"tty" description:"path for TTYs creation" default:"/tmp/vmodem"`
-	StartNum    int      `short:"s" long:"start" description:"Start number for TTYs" default:"0"`
-	NumTTYs     int      `short:"n" long:"num" description:"Number of TTYs to create" default:"1"`
-	RingMax     int      `short:"r" long:"ring" description:"Max number of rings before hangup" default:"10"`
-	NoListen    bool     `long:"nolisten" description:"Do not listen for incoming calls"`
-	AnswerChar  string   `long:"answer-char" description:"sends this character when the call is answered"`
-	Command     []string `short:"C" long:"command" description:"Command hook. Format: regexp->response->result"`
-	Translate   []string `short:"T" long:"translate" description:"Translate phone number to host. Format: regexp->format"`
-	Attach      []string `short:"A" long:"attach" description:"Attach two TTY's. Format: tty1:tty2:speed,data_bits,parity,stop_bits"`
+	Verbose         []bool   `short:"v" long:"verbose" description:"Show verbose debug information"`
+	ListenAddr      string   `short:"a" long:"addr" description:"Listen address" default:"0.0.0.0:2020"`
+	DefaultPort     string   `short:"p" long:"port" description:"Default port for outgoing calls" default:"2020"`
+	TtyPath         string   `short:"t" long:"tty" description:"path for TTYs creation" default:"/tmp/vmodem"`
+	StartNum        int      `short:"s" long:"start" description:"Start number for TTYs" default:"0"`
+	NumTTYs         int      `short:"n" long:"num" description:"Number of TTYs to create" default:"1"`
+	RingMax         int      `short:"r" long:"ring" description:"Max number of rings before hangup" default:"10"`
+	NoListen        bool     `short:"X" long:"nolisten" description:"Do not listen for incoming calls"`
+	AnswerChar      string   `short:"S" long:"answer-char" description:"sends this character when the call is answered"`
+	NagleSize       int      `short:"N" long:"nagle-size" description:"size of the nagle buffer 0 = disabled" default:"1024"`
+	NagleTimeout    int      `short:"M" long:"nagle-timeout" description:"nagle timeout in milliseconds" default:"50"`
+	GuardTime       int      `short:"G" long:"guard-time" description:"guard time in 50ms increments" default:"20"`
+	DisablePreGuard bool     `short:"D" long:"disable-pre-guard" description:"disable pre-guard time for buggy implementations"`
+	Command         []string `short:"C" long:"command" description:"Command hook. Format: regexp->response->result"`
+	Translate       []string `short:"T" long:"translate" description:"Translate phone number to host. Format: regexp->format"`
+	Attach          []string `short:"A" long:"attach" description:"Attach two TTY's. Format: tty1:tty2:speed,data_bits,parity,stop_bits"`
 }
 
 type Command struct {
@@ -118,7 +124,13 @@ func outGoingCall(m *vm.Modem, number string) (io.ReadWriteCloser, error) {
 		if err != nil {
 			return nil, err
 		}
-		return conn, nil
+		var connWrapp io.ReadWriteCloser
+		if options.NagleSize > 0 {
+			connWrapp = nagle.NewNagleWrapper(conn, options.NagleSize, time.Millisecond*time.Duration(options.NagleTimeout))
+		} else {
+			connWrapp = conn
+		}
+		return connWrapp, nil
 	}
 	if len(options.Verbose) > 0 {
 		fmt.Printf("%s: Dialing %s -> no host found\n", m.Id(), number)
@@ -193,16 +205,22 @@ func listenTask() {
 			cancel()
 			break
 		}
+		var connWrapp io.ReadWriteCloser
+		if options.NagleSize > 0 {
+			connWrapp = nagle.NewNagleWrapper(conn, options.NagleSize, time.Millisecond*time.Duration(options.NagleTimeout))
+		} else {
+			connWrapp = conn
+		}
 		assigned := false
 		// Find a free modem
 		for i := 0; i < options.NumTTYs; i++ {
-			if err := modems[i].IncomingCallSync(conn); err == nil {
+			if err := modems[i].IncomingCallSync(connWrapp); err == nil {
 				assigned = true
 				break
 			}
 		}
 		if !assigned {
-			conn.Close()
+			connWrapp.Close()
 			fmt.Fprintf(os.Stderr, "No free modems for incomming call\n")
 		}
 	}
@@ -406,6 +424,8 @@ func main() {
 			TTY:              tty,
 			RingMax:          options.RingMax,
 			AnswerChar:       options.AnswerChar,
+			GuardTime:        options.GuardTime,
+			DisablePreGuard:  options.DisablePreGuard,
 		})
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error creating modem: %v\n", err)
