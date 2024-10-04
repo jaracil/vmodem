@@ -113,6 +113,7 @@ type Modem struct {
 	ringCount        int
 	ringMax          int
 	disablePreGuard  bool
+	disablePostGuard bool
 }
 
 type StatusTransitionType func(m *Modem, prevStatus ModemStatus, newStatus ModemStatus)
@@ -130,6 +131,7 @@ type ModemConfig struct {
 	AnswerChar       string
 	GuardTime        int // 50ms increments
 	DisablePreGuard  bool
+	DisablePostGuard bool
 }
 
 func checkValidCmdChar(b byte) bool {
@@ -697,15 +699,19 @@ func (m *Modem) ttyReadTask() {
 				plusCnt++
 				lastPlus = time.Now()
 				if plusCnt == 3 {
-					go func(ctx context.Context) {
-						time.Sleep(time.Duration(m.sregs[12]) * 50 * time.Millisecond)
-						m.Lock()
-						defer m.Unlock()
-						if ctx.Err() != nil || plusCnt != 3 {
-							return
-						}
+					if m.disablePostGuard {
 						m.setStatus(StatusConnectedCmd)
-					}(m.stCtx)
+					} else {
+						go func(ctx context.Context) {
+							time.Sleep(time.Duration(m.sregs[12]) * 50 * time.Millisecond)
+							m.Lock()
+							defer m.Unlock()
+							if ctx.Err() != nil || plusCnt != 3 {
+								return
+							}
+							m.setStatus(StatusConnectedCmd)
+						}(m.stCtx)
+					}
 				}
 			} else {
 				plusCnt = 0
@@ -796,6 +802,7 @@ func NewModem(config *ModemConfig) (*Modem, error) {
 		ringMax:          config.RingMax,
 		answerChar:       config.AnswerChar,
 		disablePreGuard:  config.DisablePreGuard,
+		disablePostGuard: config.DisablePostGuard,
 		echo:             true,
 		sregs:            make(map[byte]byte),
 	}
