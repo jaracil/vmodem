@@ -2,7 +2,14 @@ package main
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
+	"github.com/aymanbagabas/go-pty"
+	"github.com/jaracil/nagle"
+	vm "github.com/jaracil/vmodem"
+	"github.com/jessevdk/go-flags"
+	t "github.com/nayarsystems/iotrace"
+	"go.bug.st/serial"
 	"io"
 	"net"
 	"os"
@@ -12,12 +19,6 @@ import (
 	"strings"
 	"syscall"
 	"time"
-
-	"github.com/aymanbagabas/go-pty"
-	"github.com/jaracil/nagle"
-	vm "github.com/jaracil/vmodem"
-	"github.com/jessevdk/go-flags"
-	"go.bug.st/serial"
 )
 
 type Options struct {
@@ -383,6 +384,16 @@ func customCommands() {
 	}
 }
 
+var tini = time.Now()
+
+type bytesHookFunc func([]byte)
+
+func newModemTraceHook(prefix string) bytesHookFunc {
+	return func(data []byte) {
+		fmt.Printf("(%d) %s:\n%s\n", time.Since(tini).Milliseconds(), prefix, hex.Dump(data))
+	}
+}
+
 func main() {
 	ctx, cancel = context.WithCancel(context.Background())
 
@@ -416,12 +427,24 @@ func main() {
 			fmt.Fprintf(os.Stderr, "Error creating tty: %v\n", err)
 			os.Exit(1)
 		}
+
+		id := fmt.Sprintf("tty%d", options.StartNum+i)
+		var rwc io.ReadWriteCloser
+		if len(options.Verbose) > 2 {
+			rwc = t.NewRWCTracer(tty, 16, time.Millisecond*time.Duration(options.NagleTimeout),
+				newModemTraceHook(fmt.Sprintf("%s-w", id)),
+				newModemTraceHook(fmt.Sprintf("%s-r", id)),
+			)
+		} else {
+			rwc = tty
+		}
+
 		m, err := vm.NewModem(&vm.ModemConfig{
-			Id:               fmt.Sprintf("tty%d", options.StartNum+i),
+			Id:               id,
 			OutgoingCall:     outGoingCall,
 			CommandHook:      commandHook,
 			StatusTransition: statusTransition,
-			TTY:              tty,
+			TTY:              rwc,
 			RingMax:          options.RingMax,
 			AnswerChar:       options.AnswerChar,
 			GuardTime:        options.GuardTime,
