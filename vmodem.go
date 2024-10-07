@@ -367,7 +367,9 @@ func (m *Modem) onlineTask(ctx context.Context) {
 			m.setStatus(StatusIdle)
 			break
 		}
+		m.Unlock()
 		m.tty.Write(buff[:n])
+		m.Lock()
 	}
 	m.Unlock()
 }
