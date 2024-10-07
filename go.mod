@@ -6,6 +6,7 @@ require (
 	github.com/aymanbagabas/go-pty v0.2.2
 	github.com/jaracil/nagle v0.0.0-20241003074037-c891ec0df2fe
 	github.com/jessevdk/go-flags v1.6.1
+	github.com/nayarsystems/iotrace v0.0.0-20241007120152-cf716b05d886
 	go.bug.st/serial v1.6.2
 )
 
