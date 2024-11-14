@@ -3,15 +3,11 @@ package main
 import (
 	"context"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
-	"github.com/aymanbagabas/go-pty"
-	"github.com/jaracil/nagle"
-	vm "github.com/jaracil/vmodem"
-	"github.com/jessevdk/go-flags"
-	t "github.com/nayarsystems/iotrace"
-	"go.bug.st/serial"
 	"io"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"regexp"
@@ -19,6 +15,13 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/aymanbagabas/go-pty"
+	"github.com/jaracil/nagle"
+	vm "github.com/jaracil/vmodem"
+	"github.com/jessevdk/go-flags"
+	t "github.com/nayarsystems/iotrace"
+	"go.bug.st/serial"
 )
 
 type Options struct {
@@ -39,6 +42,7 @@ type Options struct {
 	Command          []string `short:"C" long:"command" description:"Command hook. Format: regexp->response->result"`
 	Translate        []string `short:"T" long:"translate" description:"Translate phone number to host. Format: regexp->format"`
 	Attach           []string `short:"A" long:"attach" description:"Attach two TTY's. Format: tty1:tty2:speed,data_bits,parity,stop_bits"`
+	Metrics          string   `short:"m" long:"metrics" description:"Enable metrics http server. Format: host:port"`
 }
 
 type Command struct {
@@ -46,6 +50,21 @@ type Command struct {
 	Output string
 	Result vm.RetCode
 	re     *regexp.Regexp
+}
+
+type MetricsResponse struct {
+	ModemId       string `json:"modemId"`
+	TtyRxBytes    int    `json:"ttyRxBytes"`
+	TtyTxBytes    int    `json:"ttyTxBytes"`
+	ConnRxBytes   int    `json:"connRxBytes"`
+	ConnTxBytes   int    `json:"connTxBytes"`
+	NumConns      int    `json:"numCons"`
+	NumInConns    int    `json:"numInCons"`
+	NumOutConns   int    `json:"numOutCons"`
+	LastTtyRxTime int64  `json:"lastTtyRxTime"`
+	LastTtyTxTime int64  `json:"lastTtyTxTime"`
+	LastAtCmdTime int64  `json:"lastAtCmdTime"`
+	LastConnTime  int64  `json:"lastConnTime"`
 }
 
 func NewCommand(reStr, format string, result vm.RetCode) (*Command, error) {
@@ -395,6 +414,48 @@ func newModemTraceHook(prefix string) bytesHookFunc {
 	}
 }
 
+func enableMetrics(addr string) {
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		metricsList := make([]MetricsResponse, 0)
+		ternary := func(cond bool, val1, val2 int64) int64 {
+			if cond {
+				return val1
+			}
+			return val2
+		}
+		for _, m := range modems {
+			metrics := m.MetricsSync()
+			response := MetricsResponse{
+				ModemId:       m.Id(),
+				TtyTxBytes:    metrics.TtyTxBytes,
+				TtyRxBytes:    metrics.TtyRxBytes,
+				ConnTxBytes:   metrics.ConnTxBytes,
+				ConnRxBytes:   metrics.ConnRxBytes,
+				NumConns:      metrics.NumConns,
+				NumInConns:    metrics.NumInConns,
+				NumOutConns:   metrics.NumOutConns,
+				LastTtyRxTime: ternary(metrics.LastTtyRxTime.IsZero(), -1, int64(time.Since(metrics.LastTtyRxTime)/time.Millisecond)),
+				LastTtyTxTime: ternary(metrics.LastTtyTxTime.IsZero(), -1, int64(time.Since(metrics.LastTtyTxTime)/time.Millisecond)),
+				LastAtCmdTime: ternary(metrics.LastAtCmdTime.IsZero(), -1, int64(time.Since(metrics.LastAtCmdTime)/time.Millisecond)),
+				LastConnTime:  ternary(metrics.LastConnTime.IsZero(), -1, int64(time.Since(metrics.LastConnTime)/time.Millisecond)),
+			}
+			metricsList = append(metricsList, response)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(metricsList)
+	})
+
+	go func() {
+		err := http.ListenAndServe(addr, nil)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error starting metrics server: %v\n", err)
+			cancel()
+		}
+	}()
+
+}
+
 func main() {
 	ctx, cancel = context.WithCancel(context.Background())
 
@@ -478,6 +539,11 @@ func main() {
 	if !options.NoListen {
 		go listenTask()
 	}
+
+	if options.Metrics != "" {
+		enableMetrics(options.Metrics)
+	}
+
 	fmt.Println("Vmodem started, press Ctrl+C to exit")
 	<-ctx.Done()
 	if listener != nil {

@@ -114,6 +114,7 @@ type Modem struct {
 	ringMax          int
 	disablePreGuard  bool
 	disablePostGuard bool
+	metrics          *Metrics
 }
 
 type StatusTransitionType func(m *Modem, prevStatus ModemStatus, newStatus ModemStatus)
@@ -134,6 +135,31 @@ type ModemConfig struct {
 	DisablePostGuard bool
 }
 
+type Metrics struct {
+	// TtyTxBytes is the total number of bytes transmitted to the tty
+	TtyTxBytes int
+	// TtyRxBytes is the total number of bytes received from the tty
+	TtyRxBytes int
+	// ConnTxBytes is the total number of bytes transmitted to the connections (online mode)
+	ConnTxBytes int
+	// ConnRxBytes is the total number of bytes received from the connections (online mode)
+	ConnRxBytes int
+	// NumConns is the total number of connections
+	NumConns int
+	// NumInConns is the total number of incoming connections
+	NumInConns int
+	// NumOutConns is the total number of outgoing connections
+	NumOutConns int
+	// LastTtyTxTime is the time of the last tty transmit
+	LastTtyTxTime time.Time
+	// LastTtyRxTime is the time of the last tty receive
+	LastTtyRxTime time.Time
+	// LastAtCmdTime is the time of the last AT command
+	LastAtCmdTime time.Time
+	// LastConnTime is the time of the last connection (online mode)
+	LastConnTime time.Time
+}
+
 func checkValidCmdChar(b byte) bool {
 	return (b >= 'A' && b <= 'Z') || (b >= 'a' && b <= 'z')
 }
@@ -148,8 +174,14 @@ func (m *Modem) checkLock() {
 	}
 }
 
+func (m *Modem) ttyWrite(b []byte) {
+	m.metrics.LastTtyTxTime = time.Now()
+	m.metrics.TtyTxBytes += len(b)
+	m.tty.Write(b)
+}
+
 func (m *Modem) ttyWriteStr(s string) {
-	fmt.Fprint(m.tty, s)
+	m.ttyWrite([]byte(s))
 }
 
 func (m *Modem) TtyWriteStr(s string) {
@@ -261,9 +293,17 @@ func (m *Modem) setStatus(status ModemStatus) {
 		if prevStatus != StatusDialing && prevStatus != StatusRinging && prevStatus != StatusConnectedCmd {
 			panic(ErrInvalidStateTransition)
 		}
-		if prevStatus == StatusRinging && m.answerChar != "" {
-			m.conn.Write([]byte(m.answerChar[0:1]))
+		if prevStatus == StatusRinging {
+			if m.answerChar != "" {
+				m.conn.Write([]byte(m.answerChar[0:1]))
+			}
+			m.metrics.NumInConns++
 		}
+		if prevStatus == StatusDialing {
+			m.metrics.NumOutConns++
+		}
+		m.metrics.NumConns++
+		m.metrics.LastConnTime = time.Now()
 		m.printRetCode(RetCodeConnect)
 		go m.onlineTask(m.stCtx)
 	case StatusConnectedCmd:
@@ -367,8 +407,9 @@ func (m *Modem) onlineTask(ctx context.Context) {
 			m.setStatus(StatusIdle)
 			break
 		}
+		m.metrics.ConnRxBytes += n
 		m.Unlock()
-		m.tty.Write(buff[:n])
+		m.ttyWrite(buff[:n])
 		m.Lock()
 	}
 	m.Unlock()
@@ -538,6 +579,7 @@ func (m *Modem) processAtCommand(cmd string) RetCode {
 	if m.status() != StatusIdle && m.status() != StatusConnectedCmd && m.status() != StatusRinging {
 		return RetCodeError
 	}
+	m.metrics.LastAtCmdTime = time.Now()
 	cmdBuf := bytes.NewBufferString(cmd)
 	cmdRet := RetCodeOk
 	e := false
@@ -658,6 +700,18 @@ func (m *Modem) ProcessAtCommandSync(cmd string) RetCode {
 	return m.processAtCommand(cmd)
 }
 
+func (m *Modem) Metrics() *Metrics {
+	m.checkLock()
+	copy := *m.metrics
+	return &copy
+}
+
+func (m *Modem) MetricsSync() *Metrics {
+	m.Lock()
+	defer m.Unlock()
+	return m.Metrics()
+}
+
 func (m *Modem) ttyReadTask() {
 	aFlag := false
 	atFlag := false
@@ -681,8 +735,10 @@ func (m *Modem) ttyReadTask() {
 			m.setStatus(StatusClosed)
 			break
 		}
-
+		m.metrics.LastTtyRxTime = time.Now()
+		m.metrics.TtyRxBytes += n
 		if m.status() == StatusConnected { // online mode pass-through
+			m.metrics.ConnTxBytes += n
 			if m.conn != nil {
 				m.conn.Write(byteBuff)
 			}
@@ -731,7 +787,7 @@ func (m *Modem) ttyReadTask() {
 
 		if !atFlag {
 			if m.echo {
-				m.tty.Write(byteBuff)
+				m.ttyWrite(byteBuff)
 			}
 			if bytes.ToUpper(byteBuff)[0] == 'A' {
 				aFlag = true
@@ -776,7 +832,7 @@ func (m *Modem) ttyReadTask() {
 			if buffer.Len() < 100 && strconv.IsPrint(rune(byteBuff[0])) {
 				buffer.Write(byteBuff)
 				if m.echo {
-					m.tty.Write(byteBuff)
+					m.ttyWrite(byteBuff)
 				}
 			}
 		}
@@ -807,6 +863,7 @@ func NewModem(config *ModemConfig) (*Modem, error) {
 		disablePostGuard: config.DisablePostGuard,
 		echo:             true,
 		sregs:            make(map[byte]byte),
+		metrics:          &Metrics{},
 	}
 
 	m.stCtx, m.stCtxCancel = context.WithCancel(context.Background())
