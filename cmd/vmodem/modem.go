@@ -53,18 +53,18 @@ type Command struct {
 }
 
 type MetricsResponse struct {
-	ModemId       string `json:"modemId"`
-	TtyRxBytes    int    `json:"ttyRxBytes"`
-	TtyTxBytes    int    `json:"ttyTxBytes"`
-	ConnRxBytes   int    `json:"connRxBytes"`
-	ConnTxBytes   int    `json:"connTxBytes"`
-	NumConns      int    `json:"numCons"`
-	NumInConns    int    `json:"numInCons"`
-	NumOutConns   int    `json:"numOutCons"`
-	LastTtyRxTime int64  `json:"lastTtyRxTime"`
-	LastTtyTxTime int64  `json:"lastTtyTxTime"`
-	LastAtCmdTime int64  `json:"lastAtCmdTime"`
-	LastConnTime  int64  `json:"lastConnTime"`
+	ModemId     string `json:"modemId"`
+	TtyRxBytes  int    `json:"ttyRxBytes"`
+	TtyTxBytes  int    `json:"ttyTxBytes"`
+	ConnRxBytes int    `json:"connRxBytes"`
+	ConnTxBytes int    `json:"connTxBytes"`
+	NumConns    int    `json:"numCons"`
+	NumInConns  int    `json:"numInCons"`
+	NumOutConns int    `json:"numOutCons"`
+	LastTtyRxMs int64  `json:"lastTtyRxMs"`
+	LastTtyTxMs int64  `json:"lastTtyTxMs"`
+	LastAtCmdMs int64  `json:"lastAtCmdMs"`
+	LastConnMs  int64  `json:"lastConnMs"`
 }
 
 func NewCommand(reStr, format string, result vm.RetCode) (*Command, error) {
@@ -426,18 +426,18 @@ func enableMetrics(addr string) {
 		for _, m := range modems {
 			metrics := m.MetricsSync()
 			response := MetricsResponse{
-				ModemId:       m.Id(),
-				TtyTxBytes:    metrics.TtyTxBytes,
-				TtyRxBytes:    metrics.TtyRxBytes,
-				ConnTxBytes:   metrics.ConnTxBytes,
-				ConnRxBytes:   metrics.ConnRxBytes,
-				NumConns:      metrics.NumConns,
-				NumInConns:    metrics.NumInConns,
-				NumOutConns:   metrics.NumOutConns,
-				LastTtyRxTime: ternary(metrics.LastTtyRxTime.IsZero(), -1, int64(time.Since(metrics.LastTtyRxTime)/time.Millisecond)),
-				LastTtyTxTime: ternary(metrics.LastTtyTxTime.IsZero(), -1, int64(time.Since(metrics.LastTtyTxTime)/time.Millisecond)),
-				LastAtCmdTime: ternary(metrics.LastAtCmdTime.IsZero(), -1, int64(time.Since(metrics.LastAtCmdTime)/time.Millisecond)),
-				LastConnTime:  ternary(metrics.LastConnTime.IsZero(), -1, int64(time.Since(metrics.LastConnTime)/time.Millisecond)),
+				ModemId:     m.Id(),
+				TtyTxBytes:  metrics.TtyTxBytes,
+				TtyRxBytes:  metrics.TtyRxBytes,
+				ConnTxBytes: metrics.ConnTxBytes,
+				ConnRxBytes: metrics.ConnRxBytes,
+				NumConns:    metrics.NumConns,
+				NumInConns:  metrics.NumInConns,
+				NumOutConns: metrics.NumOutConns,
+				LastTtyRxMs: ternary(metrics.LastTtyRxTime.IsZero(), -1, int64(time.Since(metrics.LastTtyRxTime)/time.Millisecond)),
+				LastTtyTxMs: ternary(metrics.LastTtyTxTime.IsZero(), -1, int64(time.Since(metrics.LastTtyTxTime)/time.Millisecond)),
+				LastAtCmdMs: ternary(metrics.LastAtCmdTime.IsZero(), -1, int64(time.Since(metrics.LastAtCmdTime)/time.Millisecond)),
+				LastConnMs:  ternary(metrics.LastConnTime.IsZero(), -1, int64(time.Since(metrics.LastConnTime)/time.Millisecond)),
 			}
 			metricsList = append(metricsList, response)
 		}
