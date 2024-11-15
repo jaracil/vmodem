@@ -43,6 +43,7 @@ type Options struct {
 	Translate        []string `short:"T" long:"translate" description:"Translate phone number to host. Format: regexp->format"`
 	Attach           []string `short:"A" long:"attach" description:"Attach two TTY's. Format: tty1:tty2:speed,data_bits,parity,stop_bits"`
 	Metrics          string   `short:"m" long:"metrics" description:"Enable metrics http server. Format: host:port"`
+	Watchdog         int      `short:"w" long:"watchdog" description:"Connection timeout in seconds (0 = disabled)" default:"0"`
 }
 
 type Command struct {
@@ -414,6 +415,33 @@ func newModemTraceHook(prefix string) bytesHookFunc {
 	}
 }
 
+func enableWatchdog(timeout int) {
+	go func() {
+		for ctx.Err() == nil {
+			for _, m := range modems {
+				metrics := m.MetricsSync()
+				if metrics.Status != vm.StatusConnected {
+					continue
+				}
+				rxElapsed := int(time.Since(metrics.LastTtyRxTime) / time.Second)
+				txElapsed := int(time.Since(metrics.LastTtyTxTime) / time.Second)
+				connElapsed := int(time.Since(metrics.LastConnTime) / time.Second)
+				if rxElapsed > connElapsed {
+					rxElapsed = connElapsed
+				}
+				if txElapsed > connElapsed {
+					txElapsed = connElapsed
+				}
+				if rxElapsed > timeout || txElapsed > timeout {
+					m.SetStatusSync(vm.StatusIdle)
+					fmt.Fprintf(os.Stderr, "%s: Watchdog connection timeout\n", m.Id())
+				}
+			}
+			time.Sleep(time.Second)
+		}
+	}()
+}
+
 func enableMetrics(addr string) {
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		metricsList := make([]MetricsResponse, 0)
@@ -538,6 +566,10 @@ func main() {
 
 	if !options.NoListen {
 		go listenTask()
+	}
+
+	if options.Watchdog > 0 {
+		enableWatchdog(options.Watchdog)
 	}
 
 	if options.Metrics != "" {

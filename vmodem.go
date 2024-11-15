@@ -136,6 +136,8 @@ type ModemConfig struct {
 }
 
 type Metrics struct {
+	// ModemStatus is the current status of the modem
+	Status ModemStatus
 	// TtyTxBytes is the total number of bytes transmitted to the tty
 	TtyTxBytes int
 	// TtyRxBytes is the total number of bytes received from the tty
@@ -268,6 +270,17 @@ func (m *Modem) printRetCode(ret RetCode) {
 	}
 }
 
+func (m *Modem) SetStatus(status ModemStatus) {
+	m.checkLock()
+	m.setStatus(status)
+}
+
+func (m *Modem) SetStatusSync(status ModemStatus) {
+	m.Lock()
+	defer m.Unlock()
+	m.setStatus(status)
+}
+
 func (m *Modem) setStatus(status ModemStatus) {
 	prevStatus := m.st
 	if prevStatus == status {
@@ -284,7 +297,8 @@ func (m *Modem) setStatus(status ModemStatus) {
 		if prevStatus == StatusConnected || prevStatus == StatusConnectedCmd || prevStatus == StatusDialing {
 			m.printRetCode(RetCodeNoCarrier)
 		}
-		if prevStatus == StatusConnected || prevStatus == StatusConnectedCmd || prevStatus == StatusRinging {
+
+		if m.conn != nil {
 			m.conn.Close()
 			m.conn = nil
 		}
@@ -571,6 +585,10 @@ func (m *Modem) processCommand(cmdChar string, cmdNum string, cmdAssign bool, cm
 		m.echo = true
 		m.shortForm = false
 		m.quietMode = false
+		if m.status() == StatusConnected || m.status() == StatusConnectedCmd {
+			m.setStatus(StatusIdle)
+			return RetCodeSilent
+		}
 	}
 	return RetCodeOk
 }
@@ -703,6 +721,7 @@ func (m *Modem) ProcessAtCommandSync(cmd string) RetCode {
 func (m *Modem) Metrics() *Metrics {
 	m.checkLock()
 	copy := *m.metrics
+	copy.Status = m.status()
 	return &copy
 }
 
