@@ -5,7 +5,6 @@ import (
 	"os"
 
 	"github.com/creack/pty"
-	"golang.org/x/sys/unix"
 )
 
 // UnixPty is a POSIX compliant Unix pseudo-terminal.
@@ -58,29 +57,6 @@ func (p *UnixPty) Slave() *os.File {
 	return p.slave
 }
 
-// Winsize represents the terminal window size.
-type Winsize = unix.Winsize
-
-// SetWinsize implements UnixPty.
-func (p *UnixPty) SetWinsize(ws *Winsize) error {
-	var ctrlErr error
-	if err := p.control(func(fd uintptr) {
-		ctrlErr = unix.IoctlSetWinsize(int(fd), unix.TIOCSWINSZ, ws)
-	}); err != nil {
-		return err
-	}
-
-	return ctrlErr
-}
-
-// Resize implements Pty.
-func (p *UnixPty) Resize(width int, height int) error {
-	return p.SetWinsize(&Winsize{
-		Row: uint16(height),
-		Col: uint16(width),
-	})
-}
-
 // Write implements Pty.
 func (p *UnixPty) Write(b []byte) (n int, err error) {
 	return p.master.Write(b)
@@ -91,6 +67,7 @@ func (p *UnixPty) Fd() uintptr {
 	return p.master.Fd()
 }
 
+// NewPty creates a new UnixPty.
 func NewPty() (*UnixPty, error) {
 	master, slave, err := pty.Open()
 	if err != nil {

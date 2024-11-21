@@ -8,7 +8,9 @@ require (
 	github.com/jessevdk/go-flags v1.6.1
 	github.com/nayarsystems/iotrace v0.0.0-20241007120152-cf716b05d886
 	go.bug.st/serial v1.6.2
-	golang.org/x/sys v0.21.0
 )
 
-require github.com/creack/goselect v0.1.2 // indirect
+require (
+	github.com/creack/goselect v0.1.2 // indirect
+	golang.org/x/sys v0.21.0 // indirect
+)
