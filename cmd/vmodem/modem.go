@@ -16,7 +16,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/aymanbagabas/go-pty"
 	"github.com/jaracil/nagle"
 	vm "github.com/jaracil/vmodem"
 	"github.com/jessevdk/go-flags"
@@ -512,7 +511,7 @@ func main() {
 	customCommands()
 
 	for i := 0; i < options.NumTTYs; i++ {
-		tty, err := pty.New()
+		tty, err := NewPty()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error creating tty: %v\n", err)
 			os.Exit(1)
