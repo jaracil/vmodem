@@ -120,6 +120,7 @@ var (
 	listener   net.Listener
 	numToHosts []*NumToHost
 	commands   []*Command
+	tini       = time.Now()
 )
 
 func findHost(num string) string {
@@ -404,8 +405,6 @@ func customCommands() {
 	}
 }
 
-var tini = time.Now()
-
 type bytesHookFunc func([]byte)
 
 func newModemTraceHook(prefix string) bytesHookFunc {
@@ -442,6 +441,12 @@ func enableWatchdog(timeout int) {
 }
 
 func enableMetrics(addr string) {
+	http.HandleFunc("/proc", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]interface{}{"uptime": time.Since(tini).String()})
+	})
+
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		metricsList := make([]MetricsResponse, 0)
 		ternary := func(cond bool, val1, val2 int64) int64 {
