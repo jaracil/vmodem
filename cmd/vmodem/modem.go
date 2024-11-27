@@ -53,18 +53,30 @@ type Command struct {
 }
 
 type MetricsResponse struct {
-	ModemId     string `json:"modemId"`
-	TtyRxBytes  int    `json:"ttyRxBytes"`
-	TtyTxBytes  int    `json:"ttyTxBytes"`
-	ConnRxBytes int    `json:"connRxBytes"`
-	ConnTxBytes int    `json:"connTxBytes"`
-	NumConns    int    `json:"numCons"`
-	NumInConns  int    `json:"numInCons"`
-	NumOutConns int    `json:"numOutCons"`
-	LastTtyRxMs int64  `json:"lastTtyRxMs"`
-	LastTtyTxMs int64  `json:"lastTtyTxMs"`
-	LastAtCmdMs int64  `json:"lastAtCmdMs"`
-	LastConnMs  int64  `json:"lastConnMs"`
+	// ModemId is the modem identifier
+	ModemId string `json:"modemId"`
+	// TtyRxBytes is the number of bytes received from the tty
+	TtyRxBytes int `json:"ttyRxBytes"`
+	// TtyTxBytes is the number of bytes transmitted to the tty
+	TtyTxBytes int `json:"ttyTxBytes"`
+	// ConnRxBytes is the number of bytes received from the connection (online)
+	ConnRxBytes int `json:"connRxBytes"`
+	// ConnTxBytes is the number of bytes transmitted to the connection (online)
+	ConnTxBytes int `json:"connTxBytes"`
+	// NumConns is the number of accumulated connections
+	NumConns int `json:"numCons"`
+	// NumInConns is the number of incoming accumulated connections
+	NumInConns int `json:"numInCons"`
+	// NumOutConns is the number of outgoing accumulated connections
+	NumOutConns int `json:"numOutCons"`
+	// LastTtyRxMs is the time in milliseconds since the last byte received from the tty
+	LastTtyRxMs int64 `json:"lastTtyRxMs"`
+	// LastTtyTxMs is the time in milliseconds since the last byte transmitted to the tty
+	LastTtyTxMs int64 `json:"lastTtyTxMs"`
+	// LastAtCmdMs is the time in milliseconds since the last AT command
+	LastAtCmdMs int64 `json:"lastAtCmdMs"`
+	// LastConnMs is the time in milliseconds since the last connection (online)
+	LastConnMs int64 `json:"lastConnMs"`
 }
 
 func NewCommand(reStr, format string, result vm.RetCode) (*Command, error) {
