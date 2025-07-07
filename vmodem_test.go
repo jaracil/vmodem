@@ -30,18 +30,18 @@ func (m *MockReadWriteCloser) Read(p []byte) (int, error) {
 	m.mu.Lock()
 	closed := m.closed
 	m.mu.Unlock()
-	
+
 	if closed {
 		return 0, io.EOF
 	}
-	
+
 	// First try to read from initial data
 	if m.pos < len(m.data) {
 		n := copy(p, m.data[m.pos:])
 		m.pos += n
 		return n, nil
 	}
-	
+
 	// Then try to read from channel (simulating real input)
 	// Block indefinitely like a real TTY would
 	select {
@@ -54,7 +54,7 @@ func (m *MockReadWriteCloser) Read(p []byte) (int, error) {
 func (m *MockReadWriteCloser) Write(p []byte) (int, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	
+
 	if m.closed {
 		return 0, io.ErrClosedPipe
 	}
@@ -76,7 +76,7 @@ func (m *MockReadWriteCloser) WriteInput(data []byte) {
 func (m *MockReadWriteCloser) Close() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	
+
 	m.closed = true
 	return nil
 }
@@ -84,21 +84,21 @@ func (m *MockReadWriteCloser) Close() error {
 func (m *MockReadWriteCloser) GetWrittenString() string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	
+
 	return string(m.writes)
 }
 
 func (m *MockReadWriteCloser) IsClosed() bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	
+
 	return m.closed
 }
 
 func (m *MockReadWriteCloser) ClearWrites() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	
+
 	m.writes = nil
 }
 
@@ -161,25 +161,25 @@ func TestNewModem(t *testing.T) {
 			Id:  "test-modem",
 			TTY: tty,
 		}
-		
+
 		modem, err := NewModem(config)
 		if err != nil {
 			t.Fatalf("NewModem() error = %v, want nil", err)
 		}
-		
+
 		if modem == nil {
 			t.Fatal("NewModem() returned nil modem")
 		}
-		
+
 		// Check initial state
 		if modem.StatusSync() != StatusIdle {
 			t.Errorf("Initial status = %v, want %v", modem.StatusSync(), StatusIdle)
 		}
-		
+
 		// Cleanup
 		modem.CloseSync()
 	})
-	
+
 	t.Run("Nil config", func(t *testing.T) {
 		modem, err := NewModem(nil)
 		if err != ErrConfigRequired {
@@ -198,29 +198,29 @@ func TestModem_ProcessAtCommand_Basic(t *testing.T) {
 		Id:  "test-modem",
 		TTY: tty,
 	}
-	
+
 	modem, err := NewModem(config)
 	if err != nil {
 		t.Fatalf("NewModem() error = %v", err)
 	}
 	defer modem.CloseSync()
-	
+
 	// Test basic commands
 	tests := []struct {
 		command  string
 		expected RetCode
 	}{
-		{"E0", RetCodeOk},  // Echo off
-		{"E1", RetCodeOk},  // Echo on
-		{"V0", RetCodeOk},  // Verbose off
-		{"V1", RetCodeOk},  // Verbose on
-		{"Q0", RetCodeOk},  // Quiet off
-		{"Q1", RetCodeOk},  // Quiet on
-		{"H", RetCodeOk},   // Hangup
-		{"&F", RetCodeOk},  // Factory reset
-		{"Z", RetCodeOk},   // Reset
+		{"E0", RetCodeOk}, // Echo off
+		{"E1", RetCodeOk}, // Echo on
+		{"V0", RetCodeOk}, // Verbose off
+		{"V1", RetCodeOk}, // Verbose on
+		{"Q0", RetCodeOk}, // Quiet off
+		{"Q1", RetCodeOk}, // Quiet on
+		{"H", RetCodeOk},  // Hangup
+		{"&F", RetCodeOk}, // Factory reset
+		{"Z", RetCodeOk},  // Reset
 	}
-	
+
 	for _, test := range tests {
 		result := modem.ProcessAtCommandSync(test.command)
 		if result != test.expected {
@@ -236,19 +236,19 @@ func TestModem_StateTransitions(t *testing.T) {
 		Id:  "test-modem",
 		TTY: tty,
 	}
-	
+
 	modem, err := NewModem(config)
 	if err != nil {
 		t.Fatalf("NewModem() error = %v", err)
 	}
 	defer modem.CloseSync()
-	
+
 	// Test valid transition: Idle -> Dialing
 	modem.SetStatusSync(StatusDialing)
 	if modem.StatusSync() != StatusDialing {
 		t.Errorf("Expected StatusDialing, got %v", modem.StatusSync())
 	}
-	
+
 	// Return to idle
 	modem.SetStatusSync(StatusIdle)
 	if modem.StatusSync() != StatusIdle {
@@ -263,17 +263,17 @@ func TestModem_TtyOperations(t *testing.T) {
 		Id:  "test-modem",
 		TTY: tty,
 	}
-	
+
 	modem, err := NewModem(config)
 	if err != nil {
 		t.Fatalf("NewModem() error = %v", err)
 	}
 	defer modem.CloseSync()
-	
+
 	// Test writing to TTY
 	testString := "Hello, TTY!"
 	modem.TtyWriteStrSync(testString)
-	
+
 	written := tty.GetWrittenString()
 	if written != testString {
 		t.Errorf("TtyWriteStrSync wrote %q, want %q", written, testString)
@@ -287,24 +287,24 @@ func TestModem_Metrics(t *testing.T) {
 		Id:  "test-modem",
 		TTY: tty,
 	}
-	
+
 	modem, err := NewModem(config)
 	if err != nil {
 		t.Fatalf("NewModem() error = %v", err)
 	}
 	defer modem.CloseSync()
-	
+
 	// Get metrics
 	metrics := modem.MetricsSync()
 	if metrics == nil {
 		t.Fatal("MetricsSync() returned nil")
 	}
-	
+
 	// Check initial state
 	if metrics.Status != StatusIdle {
 		t.Errorf("Initial status = %v, want %v", metrics.Status, StatusIdle)
 	}
-	
+
 	if metrics.TtyTxBytes != 0 {
 		t.Errorf("Initial TtyTxBytes = %d, want 0", metrics.TtyTxBytes)
 	}
@@ -317,23 +317,23 @@ func TestModem_ATCommandFlow(t *testing.T) {
 		Id:  "test-modem",
 		TTY: tty,
 	}
-	
+
 	modem, err := NewModem(config)
 	if err != nil {
 		t.Fatalf("NewModem() error = %v", err)
 	}
 	defer modem.CloseSync()
-	
+
 	// Wait a bit for the ttyReadTask to start
 	time.Sleep(10 * time.Millisecond)
-	
+
 	tests := []struct {
 		name     string
 		command  string
 		expected string
 	}{
 		{"Echo Off", "ATE0\r", "OK"},
-		{"Echo On", "ATE1\r", "OK"}, 
+		{"Echo On", "ATE1\r", "OK"},
 		{"Verbose Off", "ATV0\r", "0"},
 		{"Verbose On", "ATV1\r", "OK"},
 		{"Quiet Off", "ATQ0\r", "OK"},
@@ -341,18 +341,18 @@ func TestModem_ATCommandFlow(t *testing.T) {
 		{"Reset", "ATZ\r", "OK"},
 		{"Hangup", "ATH\r", "OK"},
 	}
-	
+
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			// Clear previous output
 			tty.ClearWrites()
-			
+
 			// Send AT command through TTY
 			tty.WriteInput([]byte(test.command))
-			
+
 			// Wait for processing
 			time.Sleep(50 * time.Millisecond)
-			
+
 			// Check response
 			response := tty.GetWrittenString()
 			if !strings.Contains(response, test.expected) {
@@ -369,22 +369,22 @@ func TestModem_ATCommandChaining(t *testing.T) {
 		Id:  "test-modem",
 		TTY: tty,
 	}
-	
+
 	modem, err := NewModem(config)
 	if err != nil {
 		t.Fatalf("NewModem() error = %v", err)
 	}
 	defer modem.CloseSync()
-	
+
 	// Wait for ttyReadTask to start
 	time.Sleep(10 * time.Millisecond)
-	
+
 	// Send chained command
 	tty.WriteInput([]byte("ATE0V1Q0\r"))
-	
+
 	// Wait for processing
 	time.Sleep(50 * time.Millisecond)
-	
+
 	// Should get OK response
 	response := tty.GetWrittenString()
 	if !strings.Contains(response, "OK") {
@@ -399,22 +399,22 @@ func TestModem_ATCommandInvalid(t *testing.T) {
 		Id:  "test-modem",
 		TTY: tty,
 	}
-	
+
 	modem, err := NewModem(config)
 	if err != nil {
 		t.Fatalf("NewModem() error = %v", err)
 	}
 	defer modem.CloseSync()
-	
+
 	// Wait for ttyReadTask to start
 	time.Sleep(10 * time.Millisecond)
-	
+
 	// Send invalid command
 	tty.WriteInput([]byte("ATE5\r")) // E5 is invalid (only E0/E1 allowed)
-	
+
 	// Wait for processing
 	time.Sleep(50 * time.Millisecond)
-	
+
 	// Should get ERROR response
 	response := tty.GetWrittenString()
 	if !strings.Contains(response, "ERROR") {
@@ -429,30 +429,30 @@ func TestModem_SRegisterFlow(t *testing.T) {
 		Id:  "test-modem",
 		TTY: tty,
 	}
-	
+
 	modem, err := NewModem(config)
 	if err != nil {
 		t.Fatalf("NewModem() error = %v", err)
 	}
 	defer modem.CloseSync()
-	
+
 	// Wait for ttyReadTask to start
 	time.Sleep(10 * time.Millisecond)
-	
+
 	// Set S register
 	tty.WriteInput([]byte("ATS0=5\r"))
 	time.Sleep(50 * time.Millisecond)
-	
+
 	response := tty.GetWrittenString()
 	if !strings.Contains(response, "OK") {
 		t.Errorf("Expected OK response to S register set, got %q", response)
 	}
-	
+
 	// Clear output and query S register
 	tty.ClearWrites()
 	tty.WriteInput([]byte("ATS0?\r"))
 	time.Sleep(50 * time.Millisecond)
-	
+
 	response = tty.GetWrittenString()
 	if !strings.Contains(response, "005") {
 		t.Errorf("Expected S register query to show 005, got %q", response)
@@ -466,42 +466,42 @@ func TestModem_EchoFlow(t *testing.T) {
 		Id:  "test-modem",
 		TTY: tty,
 	}
-	
+
 	modem, err := NewModem(config)
 	if err != nil {
 		t.Fatalf("NewModem() error = %v", err)
 	}
 	defer modem.CloseSync()
-	
+
 	// Wait for ttyReadTask to start
 	time.Sleep(10 * time.Millisecond)
-	
+
 	// Initially echo should be on - test with a command
 	tty.WriteInput([]byte("ATE1\r"))
 	time.Sleep(50 * time.Millisecond)
-	
+
 	response := tty.GetWrittenString()
 	// With echo on, we should see the command echoed back
 	if !strings.Contains(response, "ATE1") {
 		t.Errorf("Expected command to be echoed back, got %q", response)
 	}
-	
+
 	// Clear and turn echo off
 	tty.ClearWrites()
 	tty.WriteInput([]byte("ATE0\r"))
 	time.Sleep(50 * time.Millisecond)
-	
+
 	response = tty.GetWrittenString()
 	// Should still see this command echoed (echo was on when we sent it)
 	if !strings.Contains(response, "ATE0") {
 		t.Errorf("Expected command to be echoed back, got %q", response)
 	}
-	
+
 	// Clear and send another command - this should not be echoed
 	tty.ClearWrites()
 	tty.WriteInput([]byte("ATH\r"))
 	time.Sleep(50 * time.Millisecond)
-	
+
 	response = tty.GetWrittenString()
 	// Should not see the command echoed back (only response)
 	if strings.Contains(response, "ATH") && !strings.Contains(response, "OK") {
@@ -513,33 +513,33 @@ func TestModem_EchoFlow(t *testing.T) {
 func TestModem_RepeatCommand(t *testing.T) {
 	tty := NewMockReadWriteCloser([]byte{})
 	config := &ModemConfig{
-		Id:  "test-modem", 
+		Id:  "test-modem",
 		TTY: tty,
 	}
-	
+
 	modem, err := NewModem(config)
 	if err != nil {
 		t.Fatalf("NewModem() error = %v", err)
 	}
 	defer modem.CloseSync()
-	
+
 	// Wait for ttyReadTask to start
 	time.Sleep(10 * time.Millisecond)
-	
+
 	// Send first command
 	tty.WriteInput([]byte("ATE0\r"))
 	time.Sleep(50 * time.Millisecond)
-	
+
 	response := tty.GetWrittenString()
 	if !strings.Contains(response, "OK") {
 		t.Errorf("Expected OK response, got %q", response)
 	}
-	
+
 	// Clear and send repeat command
 	tty.ClearWrites()
 	tty.WriteInput([]byte("A/"))
 	time.Sleep(50 * time.Millisecond)
-	
+
 	response = tty.GetWrittenString()
 	// Should repeat the last command (ATE0) and get OK
 	if !strings.Contains(response, "OK") {
