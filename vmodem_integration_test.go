@@ -3,6 +3,7 @@ package vmodem
 import (
 	"io"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -13,6 +14,7 @@ type MockConnection struct {
 	writeData []byte
 	closed    bool
 	peer      *MockConnection
+	mu        sync.Mutex // Protege readData, writeData y closed
 }
 
 func NewMockConnection() (*MockConnection, *MockConnection) {
@@ -26,48 +28,58 @@ func NewMockConnection() (*MockConnection, *MockConnection) {
 }
 
 func (c *MockConnection) Read(p []byte) (int, error) {
-	if c.closed {
-		return 0, io.EOF
-	}
-	
-	// Block waiting for data indefinitely (like a real connection would)
-	for len(c.readData) == 0 && !c.closed {
+	for {
+		c.mu.Lock()
+		if c.closed {
+			c.mu.Unlock()
+			return 0, io.EOF
+		}
+		
+		if len(c.readData) > 0 {
+			n := copy(p, c.readData)
+			c.readData = c.readData[n:]
+			c.mu.Unlock()
+			return n, nil
+		}
+		c.mu.Unlock()
+		
+		// Block waiting for data (like a real connection would)
 		time.Sleep(10 * time.Millisecond)
 	}
-	
-	if c.closed {
-		return 0, io.EOF
-	}
-	
-	if len(c.readData) == 0 {
-		return 0, io.EOF
-	}
-	
-	n := copy(p, c.readData)
-	c.readData = c.readData[n:]
-	return n, nil
 }
 
 func (c *MockConnection) Write(p []byte) (int, error) {
+	c.mu.Lock()
 	if c.closed {
+		c.mu.Unlock()
 		return 0, io.ErrClosedPipe
 	}
 	
-	// Write to peer's read buffer
-	if c.peer != nil {
-		c.peer.readData = append(c.peer.readData, p...)
-	}
 	// Also keep track of what we wrote
 	c.writeData = append(c.writeData, p...)
+	peer := c.peer
+	c.mu.Unlock()
+	
+	// Write to peer's read buffer (release our lock first to avoid deadlock)
+	if peer != nil {
+		peer.mu.Lock()
+		peer.readData = append(peer.readData, p...)
+		peer.mu.Unlock()
+	}
 	
 	return len(p), nil
 }
 
 func (c *MockConnection) Close() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	
 	c.closed = true
 	// Signal peer that connection is closed by making its reads return EOF
 	if c.peer != nil {
+		c.peer.mu.Lock()
 		c.peer.closed = true
+		c.peer.mu.Unlock()
 	}
 	return nil
 }

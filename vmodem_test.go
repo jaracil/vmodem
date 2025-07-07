@@ -3,6 +3,7 @@ package vmodem
 import (
 	"io"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -15,6 +16,7 @@ type MockReadWriteCloser struct {
 	closed    bool
 	readChan  chan byte
 	writeChan chan byte
+	mu        sync.Mutex // Protege writes y closed
 }
 
 func NewMockReadWriteCloser(data []byte) *MockReadWriteCloser {
@@ -25,7 +27,11 @@ func NewMockReadWriteCloser(data []byte) *MockReadWriteCloser {
 }
 
 func (m *MockReadWriteCloser) Read(p []byte) (int, error) {
-	if m.closed {
+	m.mu.Lock()
+	closed := m.closed
+	m.mu.Unlock()
+	
+	if closed {
 		return 0, io.EOF
 	}
 	
@@ -46,6 +52,9 @@ func (m *MockReadWriteCloser) Read(p []byte) (int, error) {
 }
 
 func (m *MockReadWriteCloser) Write(p []byte) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	
 	if m.closed {
 		return 0, io.ErrClosedPipe
 	}
@@ -65,19 +74,31 @@ func (m *MockReadWriteCloser) WriteInput(data []byte) {
 }
 
 func (m *MockReadWriteCloser) Close() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	
 	m.closed = true
 	return nil
 }
 
 func (m *MockReadWriteCloser) GetWrittenString() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	
 	return string(m.writes)
 }
 
 func (m *MockReadWriteCloser) IsClosed() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	
 	return m.closed
 }
 
 func (m *MockReadWriteCloser) ClearWrites() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	
 	m.writes = nil
 }
 
