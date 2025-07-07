@@ -37,12 +37,11 @@ func (m *MockReadWriteCloser) Read(p []byte) (int, error) {
 	}
 	
 	// Then try to read from channel (simulating real input)
+	// Block indefinitely like a real TTY would
 	select {
 	case b := <-m.readChan:
 		p[0] = b
 		return 1, nil
-	case <-time.After(100 * time.Millisecond):
-		return 0, io.EOF
 	}
 }
 
