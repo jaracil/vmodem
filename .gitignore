@@ -5,4 +5,7 @@ go.work.sum
 # vmodem binary
 cmd/vmodem/vmodem
 
+# Claude Code configuration
+CLAUDE.md
+
 
