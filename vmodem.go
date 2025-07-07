@@ -270,7 +270,8 @@ func (m *Modem) printRetCode(ret RetCode) {
 		}
 	}
 	if !m.quietMode {
-		m.ttyWriteStr(m.cr() + retStr + m.cr())
+		// Write directly to TTY without error handling to avoid recursion during state transitions
+		_, _ = m.tty.Write([]byte(m.cr() + retStr + m.cr()))
 	}
 }
 
