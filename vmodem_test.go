@@ -546,3 +546,77 @@ func TestModem_RepeatCommand(t *testing.T) {
 		t.Errorf("Expected OK response to repeat command, got %q", response)
 	}
 }
+
+// Test TTY write failure causes modem to close
+func TestModem_TTYWriteFailure(t *testing.T) {
+	tty := NewMockReadWriteCloser([]byte{})
+	config := &ModemConfig{
+		Id:  "test-modem",
+		TTY: tty,
+	}
+
+	modem, err := NewModem(config)
+	if err != nil {
+		t.Fatalf("NewModem() error = %v", err)
+	}
+	defer modem.CloseSync()
+
+	// Wait for ttyReadTask to start
+	time.Sleep(10 * time.Millisecond)
+
+	// Verify modem is initially in Idle state
+	if modem.StatusSync() != StatusIdle {
+		t.Errorf("Expected modem to be in Idle state, got %v", modem.StatusSync())
+	}
+
+	// Close the TTY to simulate write failure
+	tty.Close()
+
+	// Try to write to TTY - this should fail and close the modem
+	modem.TtyWriteStrSync("Test write")
+
+	// Wait a bit for the status change to propagate
+	time.Sleep(10 * time.Millisecond)
+
+	// Verify modem is now closed
+	if modem.StatusSync() != StatusClosed {
+		t.Errorf("Expected modem to be closed after TTY write failure, got %v", modem.StatusSync())
+	}
+}
+
+// Test TTY write failure during AT command processing
+func TestModem_TTYWriteFailureDuringCommand(t *testing.T) {
+	tty := NewMockReadWriteCloser([]byte{})
+	config := &ModemConfig{
+		Id:  "test-modem",
+		TTY: tty,
+	}
+
+	modem, err := NewModem(config)
+	if err != nil {
+		t.Fatalf("NewModem() error = %v", err)
+	}
+	defer modem.CloseSync()
+
+	// Wait for ttyReadTask to start
+	time.Sleep(10 * time.Millisecond)
+
+	// Verify modem is initially in Idle state
+	if modem.StatusSync() != StatusIdle {
+		t.Errorf("Expected modem to be in Idle state, got %v", modem.StatusSync())
+	}
+
+	// Close the TTY to simulate write failure
+	tty.Close()
+
+	// Send AT command that will try to write a response
+	tty.WriteInput([]byte("ATE1\r"))
+
+	// Wait for command processing and write failure
+	time.Sleep(50 * time.Millisecond)
+
+	// Verify modem is now closed due to TTY write failure
+	if modem.StatusSync() != StatusClosed {
+		t.Errorf("Expected modem to be closed after TTY write failure during command, got %v", modem.StatusSync())
+	}
+}

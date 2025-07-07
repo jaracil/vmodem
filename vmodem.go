@@ -178,8 +178,12 @@ func (m *Modem) checkLock() {
 
 func (m *Modem) ttyWrite(b []byte) {
 	m.metrics.LastTtyTxTime = time.Now()
-	m.metrics.TtyTxBytes += len(b)
-	m.tty.Write(b)
+	n, err := m.tty.Write(b)
+	if err != nil || n == 0 {
+		m.setStatus(StatusClosed)
+		return
+	}
+	m.metrics.TtyTxBytes += n
 }
 
 func (m *Modem) ttyWriteStr(s string) {
