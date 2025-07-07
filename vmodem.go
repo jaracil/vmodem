@@ -314,7 +314,8 @@ func (m *Modem) setStatus(status ModemStatus) {
 		}
 		if prevStatus == StatusRinging {
 			if m.answerChar != "" {
-				m.conn.Write([]byte(m.answerChar[0:1]))
+				// Cannot handle error by changing state inside setStatus to avoid recursion
+				_, _ = m.conn.Write([]byte(m.answerChar[0:1]))
 			}
 			m.metrics.NumInConns++
 		}
@@ -764,7 +765,11 @@ func (m *Modem) ttyReadTask() {
 		if m.status() == StatusConnected { // online mode pass-through
 			m.metrics.ConnTxBytes += n
 			if m.conn != nil {
-				m.conn.Write(byteBuff)
+				if _, err := m.conn.Write(byteBuff); err != nil {
+					// Connection write failed, disconnect
+					m.setStatus(StatusIdle)
+					continue
+				}
 			}
 			if byteBuff[0] == '+' {
 				if !m.disablePreGuard {
