@@ -190,6 +190,10 @@ All public methods are thread-safe and provide both synchronous and asynchronous
 - `ProcessAtCommand()` / `ProcessAtCommandSync()`: Execute AT commands
 - `IncomingCall()` / `IncomingCallSync()`: Handle incoming connections
 
+## API Documentation
+
+Complete API documentation is available at [pkg.go.dev](https://pkg.go.dev/github.com/jaracil/vmodem).
+
 ## Dependencies
 
 - **Go Standard Library Only**: No external dependencies required

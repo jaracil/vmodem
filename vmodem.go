@@ -1,3 +1,27 @@
+// Package vmodem provides a virtual modem implementation that simulates
+// Hayes-compatible modems over TCP/IP networks. It creates virtual TTY devices
+// and provides modem functionality for legacy systems that need to communicate
+// over modern networks.
+//
+// The core component is the Modem struct which implements a state machine
+// with the following states: Idle, Dialing, Connected, ConnectedCmd, Ringing,
+// and Closed. The modem supports standard AT commands, phone number translation,
+// and extensible hooks for custom command processing.
+//
+// Example usage:
+//
+//	config := &ModemConfig{
+//		Id:           "tty0",
+//		TTY:          ttyDevice,
+//		OutgoingCall: dialFunc,
+//		ConnectStr:   "CONNECT",
+//		RingMax:      5,
+//	}
+//	modem, err := NewModem(config)
+//	if err != nil {
+//		log.Fatal(err)
+//	}
+//	defer modem.CloseSync()
 package vmodem
 
 import (
@@ -13,24 +37,36 @@ import (
 )
 
 var (
-	ErrConfigRequired         = errors.New("config required")
-	ErrModemBusy              = errors.New("modem busy")
+	// ErrConfigRequired is returned when a required configuration parameter is missing
+	ErrConfigRequired = errors.New("config required")
+	// ErrModemBusy is returned when attempting to use a modem that is already in use
+	ErrModemBusy = errors.New("modem busy")
+	// ErrInvalidStateTransition is returned when an invalid state transition is attempted
 	ErrInvalidStateTransition = errors.New("invalid state transition")
-	ErrNoCarrier              = errors.New("no carrier")
+	// ErrNoCarrier is returned when no network connection can be established
+	ErrNoCarrier = errors.New("no carrier")
 )
 
-// ModemStatus represents the status of the modem
+// ModemStatus represents the current operational state of the modem.
+// The modem follows a strict state machine with defined transitions.
 type ModemStatus int
 
 const (
-	StatusIdle ModemStatus = iota // Initial state
+	// StatusIdle represents the initial idle state where the modem is ready for commands
+	StatusIdle ModemStatus = iota
+	// StatusDialing represents the state when the modem is attempting an outgoing connection
 	StatusDialing
+	// StatusConnected represents the state when the modem has an active data connection
 	StatusConnected
+	// StatusConnectedCmd represents the state when the modem is in command mode during an active connection
 	StatusConnectedCmd
+	// StatusRinging represents the state when the modem is receiving an incoming call
 	StatusRinging
-	StatusClosed // Terminal state, dead modem
+	// StatusClosed represents the terminal state where the modem is permanently closed
+	StatusClosed
 )
 
+// String returns a human-readable string representation of the modem status.
 func (ms ModemStatus) String() string {
 	switch ms {
 	case StatusIdle:
@@ -50,22 +86,37 @@ func (ms ModemStatus) String() string {
 	}
 }
 
+// RetCode represents the return code for AT command processing.
+// These codes correspond to standard Hayes modem response codes.
 type RetCode int
 
 const (
+	// RetCodeOk indicates successful command execution
 	RetCodeOk RetCode = iota
+	// RetCodeError indicates command execution failed
 	RetCodeError
+	// RetCodeSilent indicates no response should be sent
 	RetCodeSilent
+	// RetCodeConnect indicates a successful connection was established
 	RetCodeConnect
+	// RetCodeNoCarrier indicates no network connection is available
 	RetCodeNoCarrier
+	// RetCodeNoDialtone indicates no dial tone was detected
 	RetCodeNoDialtone
+	// RetCodeBusy indicates the remote endpoint is busy
 	RetCodeBusy
+	// RetCodeNoAnswer indicates the remote endpoint did not answer
 	RetCodeNoAnswer
+	// RetCodeRing indicates an incoming call is being received
 	RetCodeRing
+	// RetCodeSkip indicates the command should be skipped and processed by default handler
 	RetCodeSkip
+	// RetCodeUnknown indicates an unrecognized return code
 	RetCodeUnknown
 )
 
+// CmdReturnFromString converts a string representation of a modem response
+// to its corresponding RetCode. It performs case-insensitive matching.
 func CmdReturnFromString(s string) RetCode {
 	switch strings.ToUpper(s) {
 	case "OK":
@@ -93,6 +144,13 @@ func CmdReturnFromString(s string) RetCode {
 	}
 }
 
+// Modem represents a virtual Hayes-compatible modem that bridges TTY interfaces
+// with TCP/IP networks. It implements a complete modem state machine with support
+// for AT commands, phone number translation, and extensible hooks.
+//
+// The modem is thread-safe and uses a mutex to protect internal state.
+// Most operations require the caller to hold the modem lock, with Sync variants
+// available for convenience that acquire and release the lock automatically.
 type Modem struct {
 	sync.Mutex
 	st               ModemStatus
@@ -117,48 +175,74 @@ type Modem struct {
 	metrics          *Metrics
 }
 
+// StatusTransitionType defines a callback function that is called whenever the modem
+// changes state. It receives the modem instance and both the previous and new status.
 type StatusTransitionType func(m *Modem, prevStatus ModemStatus, newStatus ModemStatus)
+
+// OutgoingCallType defines a callback function for handling outgoing calls.
+// It receives the modem instance and phone number, and should return a connection
+// or an error if the call cannot be established.
 type OutgoingCallType func(m *Modem, number string) (io.ReadWriteCloser, error)
+
+// CommandHookType defines a callback function for handling custom AT commands.
+// It receives the modem instance, command character, numeric parameter, and flags
+// indicating if it's an assignment or query. It should return a RetCode indicating
+// how the command should be processed.
 type CommandHookType func(m *Modem, cmdChar string, cmdNum string, cmdAssign bool, cmdQuery bool, cmdAssignVal string) RetCode
 
+// ModemConfig contains the configuration parameters for creating a new modem instance.
+// The Id and TTY fields are required, while other fields have reasonable defaults.
 type ModemConfig struct {
-	Id               string
-	OutgoingCall     OutgoingCallType
-	CommandHook      CommandHookType
+	// Id is a unique identifier for the modem instance
+	Id string
+	// OutgoingCall is an optional callback for handling outgoing calls
+	OutgoingCall OutgoingCallType
+	// CommandHook is an optional callback for handling custom AT commands
+	CommandHook CommandHookType
+	// StatusTransition is an optional callback for status change notifications
 	StatusTransition StatusTransitionType
-	TTY              io.ReadWriteCloser
-	ConnectStr       string
-	RingMax          int
-	AnswerChar       string
-	GuardTime        int // 50ms increments
-	DisablePreGuard  bool
+	// TTY is the terminal device interface (required)
+	TTY io.ReadWriteCloser
+	// ConnectStr is the string sent when a connection is established (default: "CONNECT")
+	ConnectStr string
+	// RingMax is the maximum number of rings before hanging up (default: 5)
+	RingMax int
+	// AnswerChar is an optional character sent when answering a call
+	AnswerChar string
+	// GuardTime is the guard time for +++ escape sequence in 50ms increments (default: 20)
+	GuardTime int
+	// DisablePreGuard disables the pre-guard time check for +++ escape sequence
+	DisablePreGuard bool
+	// DisablePostGuard disables the post-guard time check for +++ escape sequence
 	DisablePostGuard bool
 }
 
+// Metrics contains runtime statistics and performance information for a modem instance.
+// All byte counters are cumulative totals since the modem was created.
 type Metrics struct {
-	// ModemStatus is the current status of the modem
+	// Status is the current operational status of the modem
 	Status ModemStatus
-	// TtyTxBytes is the total number of bytes transmitted to the tty
+	// TtyTxBytes is the total number of bytes transmitted to the TTY
 	TtyTxBytes int
-	// TtyRxBytes is the total number of bytes received from the tty
+	// TtyRxBytes is the total number of bytes received from the TTY
 	TtyRxBytes int
-	// ConnTxBytes is the total number of bytes transmitted to the connections (online mode)
+	// ConnTxBytes is the total number of bytes transmitted to network connections (online mode)
 	ConnTxBytes int
-	// ConnRxBytes is the total number of bytes received from the connections (online mode)
+	// ConnRxBytes is the total number of bytes received from network connections (online mode)
 	ConnRxBytes int
-	// NumConns is the total number of connections
+	// NumConns is the total number of connections handled
 	NumConns int
-	// NumInConns is the total number of incoming connections
+	// NumInConns is the total number of incoming connections handled
 	NumInConns int
-	// NumOutConns is the total number of outgoing connections
+	// NumOutConns is the total number of outgoing connections handled
 	NumOutConns int
-	// LastTtyTxTime is the time of the last tty transmit
+	// LastTtyTxTime is the timestamp of the last TTY transmission
 	LastTtyTxTime time.Time
-	// LastTtyRxTime is the time of the last tty receive
+	// LastTtyRxTime is the timestamp of the last TTY reception
 	LastTtyRxTime time.Time
-	// LastAtCmdTime is the time of the last AT command
+	// LastAtCmdTime is the timestamp of the last AT command processed
 	LastAtCmdTime time.Time
-	// LastConnTime is the time of the last connection (online mode)
+	// LastConnTime is the timestamp of the last connection establishment
 	LastConnTime time.Time
 }
 
@@ -190,17 +274,23 @@ func (m *Modem) ttyWriteStr(s string) {
 	m.ttyWrite([]byte(s))
 }
 
+// TtyWriteStr writes a string to the TTY device.
+// The modem lock must be held before calling this method.
+// Use TtyWriteStrSync for automatic lock management.
 func (m *Modem) TtyWriteStr(s string) {
 	m.checkLock()
 	m.ttyWriteStr(s)
 }
 
+// TtyWriteStrSync writes a string to the TTY device with automatic lock management.
+// This is a convenience method that acquires and releases the modem lock.
 func (m *Modem) TtyWriteStrSync(s string) {
 	m.Lock()
 	defer m.Unlock()
 	m.ttyWriteStr(s)
 }
 
+// Id returns the unique identifier of the modem instance.
 func (m *Modem) Id() string {
 	return m.id
 }
@@ -213,11 +303,16 @@ func (m *Modem) cr() string {
 	}
 }
 
+// Cr returns the current carriage return sequence based on the modem's short form setting.
+// Returns "\r" for short form, "\r\n" for verbose form.
+// The modem lock must be held before calling this method.
 func (m *Modem) Cr() string {
 	m.checkLock()
 	return m.cr()
 }
 
+// CrSync returns the current carriage return sequence with automatic lock management.
+// This is a convenience method that acquires and releases the modem lock.
 func (m *Modem) CrSync() string {
 	m.Lock()
 	defer m.Unlock()
@@ -275,11 +370,16 @@ func (m *Modem) printRetCode(ret RetCode) {
 	}
 }
 
+// SetStatus changes the modem's operational status.
+// The modem lock must be held before calling this method.
+// Use SetStatusSync for automatic lock management.
 func (m *Modem) SetStatus(status ModemStatus) {
 	m.checkLock()
 	m.setStatus(status)
 }
 
+// SetStatusSync changes the modem's operational status with automatic lock management.
+// This is a convenience method that acquires and releases the modem lock.
 func (m *Modem) SetStatusSync(status ModemStatus) {
 	m.Lock()
 	defer m.Unlock()
@@ -356,13 +456,16 @@ func (m *Modem) status() ModemStatus {
 	return m.st
 }
 
-// Status returns the current status of the modem. Modem lock must be held.
+// Status returns the current operational status of the modem.
+// The modem lock must be held before calling this method.
+// Use StatusSync for automatic lock management.
 func (m *Modem) Status() ModemStatus {
 	m.checkLock()
 	return m.status()
 }
 
-// StatusSync returns the current status of the modem. Modem lock is acquired and released.
+// StatusSync returns the current operational status of the modem with automatic lock management.
+// This is a convenience method that acquires and releases the modem lock.
 func (m *Modem) StatusSync() ModemStatus {
 	m.Lock()
 	defer m.Unlock()
@@ -373,13 +476,16 @@ func (m *Modem) close() {
 	m.setStatus(StatusClosed)
 }
 
-// Close closes the modem. Modem lock must be held.
+// Close terminates the modem and closes all associated resources.
+// The modem lock must be held before calling this method.
+// Use CloseSync for automatic lock management.
 func (m *Modem) Close() {
 	m.checkLock()
 	m.close()
 }
 
-// CloseSync closes the modem. Modem lock is acquired and released.
+// CloseSync terminates the modem and closes all associated resources with automatic lock management.
+// This is a convenience method that acquires and releases the modem lock.
 func (m *Modem) CloseSync() {
 	m.Lock()
 	defer m.Unlock()
@@ -444,13 +550,17 @@ func (m *Modem) incomingCall(conn io.ReadWriteCloser) error {
 	return nil
 }
 
-// IncomingCall simulates an incoming call. Modem lock must be held.
+// IncomingCall simulates an incoming call by transitioning the modem to ringing state.
+// The provided connection will be used for the call if answered.
+// The modem lock must be held before calling this method.
+// Use IncomingCallSync for automatic lock management.
 func (m *Modem) IncomingCall(conn io.ReadWriteCloser) error {
 	m.checkLock()
 	return m.incomingCall(conn)
 }
 
-// IncomingCallSync simulates an incoming call. Modem lock is acquired and released.
+// IncomingCallSync simulates an incoming call with automatic lock management.
+// This is a convenience method that acquires and releases the modem lock.
 func (m *Modem) IncomingCallSync(conn io.ReadWriteCloser) error {
 	m.Lock()
 	defer m.Unlock()
@@ -713,17 +823,25 @@ func (m *Modem) processAtCommand(cmd string) RetCode {
 	return cmdRet
 }
 
+// ProcessAtCommand processes an AT command string and returns the result code.
+// The modem lock must be held before calling this method.
+// Use ProcessAtCommandSync for automatic lock management.
 func (m *Modem) ProcessAtCommand(cmd string) RetCode {
 	m.checkLock()
 	return m.processAtCommand(cmd)
 }
 
+// ProcessAtCommandSync processes an AT command string with automatic lock management.
+// This is a convenience method that acquires and releases the modem lock.
 func (m *Modem) ProcessAtCommandSync(cmd string) RetCode {
 	m.Lock()
 	defer m.Unlock()
 	return m.processAtCommand(cmd)
 }
 
+// Metrics returns a copy of the current modem metrics and statistics.
+// The modem lock must be held before calling this method.
+// Use MetricsSync for automatic lock management.
 func (m *Modem) Metrics() *Metrics {
 	m.checkLock()
 	copy := *m.metrics
@@ -731,6 +849,8 @@ func (m *Modem) Metrics() *Metrics {
 	return &copy
 }
 
+// MetricsSync returns a copy of the current modem metrics and statistics with automatic lock management.
+// This is a convenience method that acquires and releases the modem lock.
 func (m *Modem) MetricsSync() *Metrics {
 	m.Lock()
 	defer m.Unlock()
@@ -869,6 +989,11 @@ func (m *Modem) ttyReadTask() {
 	m.Unlock()
 }
 
+// NewModem creates a new modem instance with the specified configuration.
+// The config parameter must not be nil and must contain at least Id and TTY fields.
+// The modem will start in StatusIdle state and begin processing TTY input immediately.
+//
+// Returns ErrConfigRequired if config is nil or required fields are missing.
 func NewModem(config *ModemConfig) (*Modem, error) {
 	if config == nil {
 		return nil, ErrConfigRequired
