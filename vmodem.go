@@ -162,6 +162,7 @@ type Modem struct {
 	statusTransition StatusTransitionType
 	outgoingCall     OutgoingCallType
 	commandHook      CommandHookType
+	lineHook         LineHookType
 	connectStr       string
 	answerChar       string
 	sregs            map[byte]byte
@@ -190,6 +191,11 @@ type OutgoingCallType func(m *Modem, number string) (io.ReadWriteCloser, error)
 // how the command should be processed.
 type CommandHookType func(m *Modem, cmdChar string, cmdNum string, cmdAssign bool, cmdQuery bool, cmdAssignVal string) RetCode
 
+// LineHookType defines a callback function for handling complete command lines.
+// It receives the modem instance and the complete command line. It should return
+// a RetCode indicating how the line should be processed.
+type LineHookType func(m *Modem, line string) RetCode
+
 // ModemConfig contains the configuration parameters for creating a new modem instance.
 // The Id and TTY fields are required, while other fields have reasonable defaults.
 type ModemConfig struct {
@@ -199,6 +205,8 @@ type ModemConfig struct {
 	OutgoingCall OutgoingCallType
 	// CommandHook is an optional callback for handling custom AT commands
 	CommandHook CommandHookType
+	// LineHook is an optional callback for handling complete command lines
+	LineHook LineHookType
 	// StatusTransition is an optional callback for status change notifications
 	StatusTransition StatusTransitionType
 	// TTY is the terminal device interface (required)
@@ -713,6 +721,13 @@ func (m *Modem) processAtCommand(cmd string) RetCode {
 	if m.status() != StatusIdle && m.status() != StatusConnectedCmd && m.status() != StatusRinging {
 		return RetCodeError
 	}
+	// Call line hook if present
+	if m.lineHook != nil {
+		r := m.lineHook(m, cmd)
+		if r != RetCodeSkip {
+			return r
+		}
+	}
 	m.metrics.LastAtCmdTime = time.Now()
 	cmdBuf := bytes.NewBufferString(cmd)
 	cmdRet := RetCodeOk
@@ -1008,6 +1023,7 @@ func NewModem(config *ModemConfig) (*Modem, error) {
 		id:               config.Id,
 		outgoingCall:     config.OutgoingCall,
 		commandHook:      config.CommandHook,
+		lineHook:         config.LineHook,
 		statusTransition: config.StatusTransition,
 		tty:              config.TTY,
 		connectStr:       config.ConnectStr,

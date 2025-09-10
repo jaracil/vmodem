@@ -620,3 +620,67 @@ func TestModem_TTYWriteFailureDuringCommand(t *testing.T) {
 		t.Errorf("Expected modem to be closed after TTY write failure during command, got %v", modem.StatusSync())
 	}
 }
+
+func TestModem_LineHook(t *testing.T) {
+	tests := []struct {
+		name           string
+		command        string
+		expectedLine   string
+		expectedResult string
+	}{
+		{
+			name:           "LineHook intercepts E8 and returns OK",
+			command:        "ATE8\r",
+			expectedLine:   "E8",
+			expectedResult: "OK",
+		},
+		{
+			name:           "LineHook skips E9 and produces ERROR for invalid command",
+			command:        "ATE9\r",
+			expectedLine:   "E9", 
+			expectedResult: "ERROR",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var capturedLine string
+
+			lineHook := func(m *Modem, line string) RetCode {
+				capturedLine = line
+				if line == "E8" {
+					return RetCodeOk
+				}
+				return RetCodeSkip
+			}
+
+			mockTTY := NewMockReadWriteCloser([]byte(tt.command))
+			config := &ModemConfig{
+				Id:       "test-modem",
+				TTY:      mockTTY,
+				LineHook: lineHook,
+			}
+
+			modem, err := NewModem(config)
+			if err != nil {
+				t.Fatalf("NewModem() error = %v", err)
+			}
+			defer modem.CloseSync()
+
+			// Wait for command processing
+			time.Sleep(50 * time.Millisecond)
+
+			// Verify correct line was captured
+			if capturedLine != tt.expectedLine {
+				t.Errorf("Expected capturedLine = %q, got %q", tt.expectedLine, capturedLine)
+			}
+
+			// Verify modem response
+			writesStr := mockTTY.GetWrittenString()
+
+			if !strings.Contains(writesStr, tt.expectedResult) {
+				t.Errorf("Expected response to contain %q, got: %q", tt.expectedResult, writesStr)
+			}
+		})
+	}
+}
