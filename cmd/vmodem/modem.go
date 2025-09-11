@@ -39,6 +39,7 @@ type Options struct {
 	DisablePreGuard  bool     `short:"D" long:"disable-pre-guard" description:"disable pre-guard time for buggy implementations"`
 	DisablePostGuard bool     `short:"P" long:"disable-post-guard" description:"disable post-guard time for buggy implementations"`
 	Command          []string `short:"C" long:"command" description:"Command hook. Format: regexp->response->result"`
+	Line             []string `short:"L" long:"line" description:"Line hook. Format: regexp->response->result"`
 	Translate        []string `short:"T" long:"translate" description:"Translate phone number to host. Format: regexp->format"`
 	Attach           []string `short:"A" long:"attach" description:"Attach two TTY's. Format: tty1:tty2:speed,data_bits,parity,stop_bits"`
 	Metrics          string   `short:"m" long:"metrics" description:"Enable metrics http server. Format: host:port"`
@@ -46,6 +47,13 @@ type Options struct {
 }
 
 type Command struct {
+	ReStr  string
+	Output string
+	Result vm.RetCode
+	re     *regexp.Regexp
+}
+
+type Line struct {
 	ReStr  string
 	Output string
 	Result vm.RetCode
@@ -85,6 +93,19 @@ func NewCommand(reStr, format string, result vm.RetCode) (*Command, error) {
 		return nil, err
 	}
 	return &Command{
+		Output: format,
+		ReStr:  reStr,
+		Result: result,
+		re:     re,
+	}, nil
+}
+
+func NewLine(reStr, format string, result vm.RetCode) (*Line, error) {
+	re, err := regexp.Compile(reStr)
+	if err != nil {
+		return nil, err
+	}
+	return &Line{
 		Output: format,
 		ReStr:  reStr,
 		Result: result,
@@ -132,6 +153,7 @@ var (
 	listener   net.Listener
 	numToHosts []*NumToHost
 	commands   []*Command
+	lines      []*Line
 	tini       = time.Now()
 )
 
@@ -192,6 +214,21 @@ func commandHook(m *vm.Modem, cmdChar string, cmdNum string, cmdAssign bool, cmd
 				m.TtyWriteStr(fmt.Sprintf("\r\n%s\r\n", c.Output))
 			}
 			return c.Result
+		}
+	}
+	return vm.RetCodeSkip
+}
+
+func lineHook(m *vm.Modem, line string) vm.RetCode {
+	if len(options.Verbose) > 1 {
+		fmt.Printf("%s: Line hook: %s\n", m.Id(), line)
+	}
+	for _, l := range lines {
+		if l.re.MatchString(line) {
+			if l.Output != "" {
+				m.TtyWriteStr(fmt.Sprintf("\r\n%s\r\n", l.Output))
+			}
+			return l.Result
 		}
 	}
 	return vm.RetCodeSkip
@@ -417,6 +454,27 @@ func customCommands() {
 	}
 }
 
+func customLines() {
+	for _, l := range options.Line {
+		parts := strings.Split(l, "->")
+		if len(parts) != 3 {
+			fmt.Fprintf(os.Stderr, "Invalid line: %s\n", l)
+			os.Exit(1)
+		}
+		lineRet := vm.CmdReturnFromString(parts[2])
+		if lineRet == vm.RetCodeUnknown {
+			fmt.Fprintf(os.Stderr, "Invalid line return: %s\n", parts[2])
+			os.Exit(1)
+		}
+		line, err := NewLine(parts[0], parts[1], lineRet)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error creating line: %v\n", err)
+			os.Exit(1)
+		}
+		lines = append(lines, line)
+	}
+}
+
 type bytesHookFunc func([]byte)
 
 func newModemTraceHook(prefix string) bytesHookFunc {
@@ -526,6 +584,7 @@ func main() {
 
 	phoneTranslations()
 	customCommands()
+	customLines()
 
 	for i := 0; i < options.NumTTYs; i++ {
 		tty, err := NewPty()
@@ -549,6 +608,7 @@ func main() {
 			Id:               id,
 			OutgoingCall:     outGoingCall,
 			CommandHook:      commandHook,
+			LineHook:         lineHook,
 			StatusTransition: statusTransition,
 			TTY:              rwc,
 			RingMax:          options.RingMax,
