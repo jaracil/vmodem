@@ -44,6 +44,7 @@ type Options struct {
 	Attach           []string `short:"A" long:"attach" description:"Attach two TTY's. Format: tty1:tty2:speed,data_bits,parity,stop_bits"`
 	Metrics          string   `short:"m" long:"metrics" description:"Enable metrics http server. Format: host:port"`
 	Watchdog         int      `short:"w" long:"watchdog" description:"Connection timeout in seconds (0 = disabled)" default:"0"`
+	InitCmd          []string `short:"I" long:"init" description:"AT commands to initialize each modem (e.g., 'e0' for echo off, 'e0v1' for echo off and verbose)"`
 }
 
 type Command struct {
@@ -621,6 +622,26 @@ func main() {
 			fmt.Fprintf(os.Stderr, "Error creating modem: %v\n", err)
 			os.Exit(1)
 		}
+		
+		// Execute initialization commands before exposing the TTY
+		for _, initCmd := range options.InitCmd {
+			if len(options.Verbose) > 0 {
+				fmt.Printf("%s: Executing init command: AT%s\n", m.Id(), initCmd)
+			}
+			
+			// Send the AT command
+			// The response will be written to the TTY but since it's not yet exposed
+			// via symlink, no external process will see it
+			result := m.ProcessAtCommandSync(initCmd)
+			
+			if len(options.Verbose) > 0 {
+				fmt.Printf("%s: Init command result: %v\n", m.Id(), result)
+			}
+			
+			// Small delay to ensure the command is fully processed
+			time.Sleep(10 * time.Millisecond)
+		}
+		
 		modems = append(modems, m)
 		err = os.Symlink(tty.Name(), fmt.Sprintf("%s/tty%d", options.TtyPath, options.StartNum+i))
 		if err != nil {
