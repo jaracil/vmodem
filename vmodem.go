@@ -721,6 +721,8 @@ func (m *Modem) processAtCommand(cmd string) RetCode {
 	if m.status() != StatusIdle && m.status() != StatusConnectedCmd && m.status() != StatusRinging {
 		return RetCodeError
 	}
+	// Update LastAtCmdTime before processing hooks
+	m.metrics.LastAtCmdTime = time.Now()
 	// Call line hook if present
 	if m.lineHook != nil {
 		r := m.lineHook(m, cmd)
@@ -728,7 +730,6 @@ func (m *Modem) processAtCommand(cmd string) RetCode {
 			return r
 		}
 	}
-	m.metrics.LastAtCmdTime = time.Now()
 	cmdBuf := bytes.NewBufferString(cmd)
 	cmdRet := RetCodeOk
 	e := false
