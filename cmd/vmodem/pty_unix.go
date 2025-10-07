@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/creack/pty"
+	"golang.org/x/sys/unix"
 )
 
 // UnixPty is a POSIX compliant Unix pseudo-terminal.
@@ -65,6 +66,22 @@ func (p *UnixPty) Write(b []byte) (n int, err error) {
 // Fd implements Pty.
 func (p *UnixPty) Fd() uintptr {
 	return p.master.Fd()
+}
+
+// IsSlaveClosed checks if the slave end has no readers/writers.
+func (p *UnixPty) IsSlaveClosed() (bool, error) {
+	fds := []unix.PollFd{{
+		Fd:     int32(p.master.Fd()),
+		Events: unix.POLLOUT,
+	}}
+
+	_, err := unix.Poll(fds, 0) // No wait
+	if err != nil {
+		return false, err
+	}
+
+	// POLLHUP indicates that the slave has no processes with it open
+	return (fds[0].Revents & unix.POLLHUP) != 0, nil
 }
 
 // NewPty creates a new UnixPty.

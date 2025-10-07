@@ -373,6 +373,13 @@ func (m *Modem) printRetCode(ret RetCode) {
 		}
 	}
 	if !m.quietMode {
+		// Check if PTY slave is open to avoid buffer saturation
+		if ptyChecker, ok := m.tty.(interface{ IsSlaveClosed() (bool, error) }); ok {
+			if closed, err := ptyChecker.IsSlaveClosed(); err == nil && closed {
+				// Slave is closed, skip writing to avoid buffer saturation
+				return
+			}
+		}
 		// Write directly to TTY without error handling to avoid recursion during state transitions
 		m.metrics.LastTtyTxTime = time.Now()
 		_, _ = m.tty.Write([]byte(m.cr() + retStr + m.cr()))
