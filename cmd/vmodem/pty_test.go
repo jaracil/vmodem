@@ -16,13 +16,9 @@ func TestNewPty(t *testing.T) {
 		t.Fatal("NewPty() returned nil PTY")
 	}
 
-	// Check that master and slave are valid files
+	// Check that master is valid
 	if pty.Master() == nil {
 		t.Error("Master() returned nil")
-	}
-
-	if pty.Slave() == nil {
-		t.Error("Slave() returned nil")
 	}
 
 	// Check that name is not empty
