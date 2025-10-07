@@ -564,6 +564,9 @@ func main() {
 
 	gfParser := flags.NewParser(&options, flags.Default)
 	if _, err := gfParser.ParseArgs(os.Args); err != nil {
+		if flagsErr, ok := err.(*flags.Error); ok && flagsErr.Type == flags.ErrHelp {
+			os.Exit(0)
+		}
 		fmt.Fprintf(os.Stderr, "Error parsing flags: %v\n", err)
 		os.Exit(1)
 	}
