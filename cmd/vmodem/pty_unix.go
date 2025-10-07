@@ -1,17 +1,16 @@
 package main
 
 import (
-	"errors"
 	"os"
 
 	"github.com/creack/pty"
-	"golang.org/x/sys/unix"
 )
 
 // UnixPty is a POSIX compliant Unix pseudo-terminal.
 type UnixPty struct {
-	master, slave *os.File
-	closed        bool
+	master    *os.File
+	slaveName string
+	closed    bool
 }
 
 // Close implements Pty.
@@ -22,12 +21,12 @@ func (p *UnixPty) Close() error {
 	defer func() {
 		p.closed = true
 	}()
-	return errors.Join(p.master.Close(), p.slave.Close())
+	return p.master.Close()
 }
 
 // Name implements Pty.
 func (p *UnixPty) Name() string {
-	return p.slave.Name()
+	return p.slaveName
 }
 
 // Read implements Pty.
@@ -53,10 +52,6 @@ func (p *UnixPty) Master() *os.File {
 	return p.master
 }
 
-// Slave implements UnixPty.
-func (p *UnixPty) Slave() *os.File {
-	return p.slave
-}
 
 // Write implements Pty.
 func (p *UnixPty) Write(b []byte) (n int, err error) {
@@ -68,22 +63,6 @@ func (p *UnixPty) Fd() uintptr {
 	return p.master.Fd()
 }
 
-// IsSlaveClosed checks if the slave end has no readers/writers.
-func (p *UnixPty) IsSlaveClosed() (bool, error) {
-	fds := []unix.PollFd{{
-		Fd:     int32(p.master.Fd()),
-		Events: unix.POLLOUT,
-	}}
-
-	_, err := unix.Poll(fds, 0) // No wait
-	if err != nil {
-		return false, err
-	}
-
-	// POLLHUP indicates that the slave has no processes with it open
-	return (fds[0].Revents & unix.POLLHUP) != 0, nil
-}
-
 // NewPty creates a new UnixPty.
 func NewPty() (*UnixPty, error) {
 	master, slave, err := pty.Open()
@@ -91,8 +70,15 @@ func NewPty() (*UnixPty, error) {
 		return nil, err
 	}
 
+	// Save the slave name before closing
+	slaveName := slave.Name()
+
+	// Close the slave immediately - we don't need to keep it open
+	// External processes will open it through the symlink
+	slave.Close()
+
 	return &UnixPty{
-		master: master,
-		slave:  slave,
+		master:    master,
+		slaveName: slaveName,
 	}, nil
 }

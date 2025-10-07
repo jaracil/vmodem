@@ -33,6 +33,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -52,8 +53,10 @@ var (
 type ModemStatus int
 
 const (
+	// StatusDetached represents the state when no TTY client is connected
+	StatusDetached ModemStatus = iota
 	// StatusIdle represents the initial idle state where the modem is ready for commands
-	StatusIdle ModemStatus = iota
+	StatusIdle
 	// StatusDialing represents the state when the modem is attempting an outgoing connection
 	StatusDialing
 	// StatusConnected represents the state when the modem has an active data connection
@@ -69,6 +72,8 @@ const (
 // String returns a human-readable string representation of the modem status.
 func (ms ModemStatus) String() string {
 	switch ms {
+	case StatusDetached:
+		return "Detached"
 	case StatusIdle:
 		return "Idle"
 	case StatusDialing:
@@ -372,14 +377,7 @@ func (m *Modem) printRetCode(ret RetCode) {
 			retStr = "RING"
 		}
 	}
-	if !m.quietMode {
-		// Check if PTY slave is open to avoid buffer saturation
-		if ptyChecker, ok := m.tty.(interface{ IsSlaveClosed() (bool, error) }); ok {
-			if closed, err := ptyChecker.IsSlaveClosed(); err == nil && closed {
-				// Slave is closed, skip writing to avoid buffer saturation
-				return
-			}
-		}
+	if !m.quietMode && m.status() != StatusDetached {
 		// Write directly to TTY without error handling to avoid recursion during state transitions
 		m.metrics.LastTtyTxTime = time.Now()
 		_, _ = m.tty.Write([]byte(m.cr() + retStr + m.cr()))
@@ -414,8 +412,21 @@ func (m *Modem) setStatus(status ModemStatus) {
 	m.stCtx, m.stCtxCancel = context.WithCancel(context.Background())
 	m.st = status
 	switch m.st {
+	case StatusDetached:
+		// Can transition to Detached from any state except Closed
+		// Clean up any active connection
+		if m.conn != nil {
+			m.conn.Close()
+			m.conn = nil
+		}
+		// Connection was active, but we don't print anything since no client is attached
+
 	case StatusIdle:
-		if prevStatus == StatusConnected || prevStatus == StatusConnectedCmd || prevStatus == StatusDialing {
+		// Can only transition to Idle from Detached or after call termination
+		switch prevStatus {
+		case StatusDetached:
+			// TTY client just connected, no message needed
+		case StatusConnected, StatusConnectedCmd, StatusDialing:
 			m.printRetCode(RetCodeNoCarrier)
 		}
 
@@ -894,15 +905,52 @@ func (m *Modem) ttyReadTask() {
 	m.Lock()
 	for m.status() != StatusClosed {
 		m.Unlock()
+
+		// If detached, start a timer that will transition to Idle
+		// if Read() blocks for more than 100ms (which means a client has connected)
+		var timer *time.Timer
+		if m.StatusSync() == StatusDetached {
+			timer = time.AfterFunc(100*time.Millisecond, func() {
+				m.Lock()
+				if m.status() == StatusDetached {
+					m.setStatus(StatusIdle)
+				}
+				m.Unlock()
+			})
+		}
+
 		n, err := m.tty.Read(byteBuff)
+
+		// Stop the timer if it hasn't fired yet
+		if timer != nil {
+			timer.Stop()
+		}
+
 		m.Lock()
 		if m.status() == StatusClosed {
 			break
 		}
 
 		if err != nil || n == 0 {
+			// EIO (input/output error) means no one is connected to the slave PTY
+			// This is expected when no external process has the TTY open
+			if errors.Is(err, syscall.EIO) {
+				if m.status() != StatusDetached {
+					m.setStatus(StatusDetached)
+				}
+				m.Unlock()
+				time.Sleep(100 * time.Millisecond)
+				m.Lock()
+				continue
+			}
+			// Real error, close the modem
 			m.setStatus(StatusClosed)
 			break
+		}
+
+		// Successfully read data, ensure we're not in Detached state
+		if m.status() == StatusDetached {
+			m.setStatus(StatusIdle)
 		}
 		m.metrics.LastTtyRxTime = time.Now()
 		m.metrics.TtyRxBytes += n
@@ -1028,7 +1076,7 @@ func NewModem(config *ModemConfig) (*Modem, error) {
 	}
 
 	m := &Modem{
-		st:               StatusIdle,
+		st:               StatusDetached,
 		id:               config.Id,
 		outgoingCall:     config.OutgoingCall,
 		commandHook:      config.CommandHook,
