@@ -64,6 +64,8 @@ type Line struct {
 type MetricsResponse struct {
 	// ModemId is the modem identifier
 	ModemId string `json:"modemId"`
+	// Status is the current operational status of the modem
+	Status string `json:"status"`
 	// TtyRxBytes is the number of bytes received from the tty
 	TtyRxBytes int `json:"ttyRxBytes"`
 	// TtyTxBytes is the number of bytes transmitted to the tty
@@ -530,6 +532,7 @@ func enableMetrics(addr string) {
 			metrics := m.MetricsSync()
 			response := MetricsResponse{
 				ModemId:     m.Id(),
+				Status:      metrics.Status.String(),
 				TtyTxBytes:  metrics.TtyTxBytes,
 				TtyRxBytes:  metrics.TtyRxBytes,
 				ConnTxBytes: metrics.ConnTxBytes,
