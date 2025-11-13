@@ -109,6 +109,7 @@ func TestModemStatus_String(t *testing.T) {
 		status   ModemStatus
 		expected string
 	}{
+		{"StatusDetached", StatusDetached, "Detached"},
 		{"StatusIdle", StatusIdle, "Idle"},
 		{"StatusDialing", StatusDialing, "Dialing"},
 		{"StatusConnected", StatusConnected, "Connected"},
@@ -171,9 +172,9 @@ func TestNewModem(t *testing.T) {
 			t.Fatal("NewModem() returned nil modem")
 		}
 
-		// Check initial state
-		if modem.StatusSync() != StatusIdle {
-			t.Errorf("Initial status = %v, want %v", modem.StatusSync(), StatusIdle)
+		// Check initial state - should be Detached when no client is connected
+		if modem.StatusSync() != StatusDetached {
+			t.Errorf("Initial status = %v, want %v", modem.StatusSync(), StatusDetached)
 		}
 
 		// Cleanup
@@ -204,6 +205,9 @@ func TestModem_ProcessAtCommand_Basic(t *testing.T) {
 		t.Fatalf("NewModem() error = %v", err)
 	}
 	defer modem.CloseSync()
+
+	// Transition to Idle state (modem starts in Detached)
+	modem.SetStatusSync(StatusIdle)
 
 	// Test basic commands
 	tests := []struct {
@@ -242,6 +246,12 @@ func TestModem_StateTransitions(t *testing.T) {
 		t.Fatalf("NewModem() error = %v", err)
 	}
 	defer modem.CloseSync()
+
+	// Modem starts in Detached, transition to Idle first
+	modem.SetStatusSync(StatusIdle)
+	if modem.StatusSync() != StatusIdle {
+		t.Errorf("Expected StatusIdle after transition, got %v", modem.StatusSync())
+	}
 
 	// Test valid transition: Idle -> Dialing
 	modem.SetStatusSync(StatusDialing)
@@ -300,9 +310,9 @@ func TestModem_Metrics(t *testing.T) {
 		t.Fatal("MetricsSync() returned nil")
 	}
 
-	// Check initial state
-	if metrics.Status != StatusIdle {
-		t.Errorf("Initial status = %v, want %v", metrics.Status, StatusIdle)
+	// Check initial state - should be Detached
+	if metrics.Status != StatusDetached {
+		t.Errorf("Initial status = %v, want %v", metrics.Status, StatusDetached)
 	}
 
 	if metrics.TtyTxBytes != 0 {
@@ -564,7 +574,10 @@ func TestModem_TTYWriteFailure(t *testing.T) {
 	// Wait for ttyReadTask to start
 	time.Sleep(10 * time.Millisecond)
 
-	// Verify modem is initially in Idle state
+	// Transition to Idle state (modem starts in Detached)
+	modem.SetStatusSync(StatusIdle)
+
+	// Verify modem is in Idle state
 	if modem.StatusSync() != StatusIdle {
 		t.Errorf("Expected modem to be in Idle state, got %v", modem.StatusSync())
 	}
@@ -601,7 +614,10 @@ func TestModem_TTYWriteFailureDuringCommand(t *testing.T) {
 	// Wait for ttyReadTask to start
 	time.Sleep(10 * time.Millisecond)
 
-	// Verify modem is initially in Idle state
+	// Transition to Idle state (modem starts in Detached)
+	modem.SetStatusSync(StatusIdle)
+
+	// Verify modem is in Idle state
 	if modem.StatusSync() != StatusIdle {
 		t.Errorf("Expected modem to be in Idle state, got %v", modem.StatusSync())
 	}
@@ -637,7 +653,7 @@ func TestModem_LineHook(t *testing.T) {
 		{
 			name:           "LineHook skips E9 and produces ERROR for invalid command",
 			command:        "ATE9\r",
-			expectedLine:   "E9", 
+			expectedLine:   "E9",
 			expectedResult: "ERROR",
 		},
 	}

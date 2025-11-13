@@ -135,6 +135,10 @@ func TestModem_InterModemCommunication(t *testing.T) {
 
 	t.Logf("Initial states - Caller: %v, Answerer: %v", caller.StatusSync(), answerer.StatusSync())
 
+	// Transition modems from Detached to Idle (simulate client connection)
+	caller.SetStatusSync(StatusIdle)
+	answerer.SetStatusSync(StatusIdle)
+
 	// Set up answerer to receive incoming call
 	err = answerer.IncomingCallSync(answererConn)
 	if err != nil {
@@ -242,6 +246,10 @@ func TestModem_BidirectionalDataTransfer(t *testing.T) {
 
 	// Wait for initialization
 	time.Sleep(20 * time.Millisecond)
+
+	// Transition modems from Detached to Idle (simulate client connection)
+	caller.SetStatusSync(StatusIdle)
+	answerer.SetStatusSync(StatusIdle)
 
 	// Establish connection
 	err = answerer.IncomingCallSync(answererConn)
@@ -365,6 +373,10 @@ func TestModem_EscapeSequenceDuringConnection(t *testing.T) {
 	// Wait for initialization
 	time.Sleep(20 * time.Millisecond)
 
+	// Transition modems from Detached to Idle (simulate client connection)
+	caller.SetStatusSync(StatusIdle)
+	answerer.SetStatusSync(StatusIdle)
+
 	// Establish connection
 	err = answerer.IncomingCallSync(answererConn)
 	if err != nil {
@@ -442,6 +454,9 @@ func TestModem_ConnectionFailure(t *testing.T) {
 	// Wait for initialization
 	time.Sleep(20 * time.Millisecond)
 
+	// Transition modem from Detached to Idle (simulate client connection)
+	caller.SetStatusSync(StatusIdle)
+
 	// Attempt to dial
 	callerTTY.WriteInput([]byte("ATDT12345\r"))
 
@@ -500,6 +515,10 @@ func TestModem_CommunicationMetrics(t *testing.T) {
 
 	// Wait for initialization
 	time.Sleep(20 * time.Millisecond)
+
+	// Transition modems from Detached to Idle (simulate client connection)
+	caller.SetStatusSync(StatusIdle)
+	answerer.SetStatusSync(StatusIdle)
 
 	// Get initial metrics
 	callerMetrics := caller.MetricsSync()
@@ -610,6 +629,10 @@ func TestModem_ReturnToOnlineMode(t *testing.T) {
 
 	// Wait for initialization
 	time.Sleep(20 * time.Millisecond)
+
+	// Transition modems from Detached to Idle (simulate client connection)
+	caller.SetStatusSync(StatusIdle)
+	answerer.SetStatusSync(StatusIdle)
 
 	// Establish connection
 	err = answerer.IncomingCallSync(answererConn)

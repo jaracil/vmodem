@@ -52,7 +52,6 @@ func (p *UnixPty) Master() *os.File {
 	return p.master
 }
 
-
 // Write implements Pty.
 func (p *UnixPty) Write(b []byte) (n int, err error) {
 	return p.master.Write(b)
