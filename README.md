@@ -5,12 +5,13 @@ VModem is a Go library that implements a virtual Hayes-compatible modem simulato
 ## Features
 
 - **Complete Hayes AT Command Set**: Supports standard AT commands including dial, answer, hangup, configuration, and S-registers
-- **State Machine Management**: Robust modem state transitions (Idle, Dialing, Connected, Ringing, etc.)
+- **State Machine Management**: Robust modem state transitions (Detached, Idle, Dialing, Connected, Ringing, etc.)
 - **TCP/IP Transport**: Routes modem calls over modern TCP/IP networks
-- **Metrics and Monitoring**: Built-in statistics tracking and performance monitoring
+- **Virtual TTY Support**: Creates pseudo-terminals for legacy application compatibility
+- **Metrics and Monitoring**: Built-in statistics tracking with optional HTTP endpoint
 - **Concurrent Operations**: Thread-safe design with proper goroutine management
 - **Configurable Behavior**: Extensive configuration options for timeouts, guards, and responses
-- **Zero External Dependencies**: Uses only Go standard library
+- **Extensible Hooks**: Custom command processing and line hooks for specialized behavior
 
 ## Installation
 
@@ -66,12 +67,20 @@ func main() {
 The modem implements a strict state machine with the following states:
 
 ```
-Idle → Dialing → Connected ⇄ ConnectedCmd
-  ↓       ↓
-Ringing → Connected
-  ↓
-Closed (terminal state)
+Detached → Idle → Dialing → Connected ⇄ ConnectedCmd
+             ↓       ↓
+           Ringing → Connected
+             ↓
+           Closed (terminal state)
 ```
+
+- **Detached**: No TTY client is connected (initial state)
+- **Idle**: TTY client connected, ready to accept commands
+- **Dialing**: Outgoing call in progress
+- **Connected**: Active data connection (online mode)
+- **ConnectedCmd**: Active connection in command mode (after escape sequence)
+- **Ringing**: Incoming call being signaled
+- **Closed**: Modem permanently closed (terminal state)
 
 ### Supported AT Commands
 
@@ -90,6 +99,7 @@ type ModemConfig struct {
     TTY              io.ReadWriteCloser       // TTY interface
     OutgoingCall     OutgoingCallType         // Dial-out handler
     CommandHook      CommandHookType          // Custom AT command hook
+    LineHook         LineHookType             // Complete command line hook
     StatusTransition StatusTransitionType     // State change notifications
     ConnectStr       string                   // Connect response string
     RingMax          int                      // Maximum rings before timeout
@@ -105,14 +115,24 @@ type ModemConfig struct {
 Customize modem behavior with hook functions:
 
 ```go
-// Custom AT command processing
-func commandHook(m *vmodem.Modem, cmdChar string, cmdNum string, 
+// Custom AT command processing (individual commands)
+func commandHook(m *vmodem.Modem, cmdChar string, cmdNum string,
                  cmdAssign bool, cmdQuery bool, cmdAssignVal string) vmodem.RetCode {
     if cmdChar == "I" && cmdNum == "0" {
         m.TtyWriteStr("VModem v1.0")
         return vmodem.RetCodeOk
     }
     return vmodem.RetCodeSkip // Let default processing handle it
+}
+
+// Complete command line processing (before parsing)
+func lineHook(m *vmodem.Modem, line string) vmodem.RetCode {
+    if strings.HasPrefix(line, "CUSTOM") {
+        // Handle custom command
+        m.TtyWriteStr("Custom command executed")
+        return vmodem.RetCodeOk
+    }
+    return vmodem.RetCodeSkip // Let default parsing handle it
 }
 
 // Outgoing call handler
@@ -172,6 +192,17 @@ type Metrics struct {
 }
 ```
 
+### HTTP Metrics Endpoint
+
+The reference implementation (`cmd/vmodem`) provides an optional HTTP metrics endpoint that exposes modem statistics in JSON format, including:
+
+- Current modem status (Detached, Idle, Connected, etc.)
+- Byte counters for TTY and network traffic
+- Connection counts (total, incoming, outgoing)
+- Timestamps of last activities
+
+Access metrics via HTTP GET request to the configured metrics address (e.g., `http://localhost:8080/metrics/modem-id`).
+
 ## Error Handling
 
 The library defines specific error types:
@@ -196,7 +227,17 @@ Complete API documentation is available at [pkg.go.dev](https://pkg.go.dev/githu
 
 ## Dependencies
 
-- **Go Standard Library Only**: No external dependencies required
+### Library
+The core `vmodem` library has minimal dependencies and can be used standalone.
+
+### Reference Implementation (`cmd/vmodem`)
+The complete modem server implementation uses the following dependencies:
+
+- `github.com/creack/pty` - PTY (pseudo-terminal) creation and management
+- `github.com/jaracil/nagle` - Nagle buffering for network optimization
+- `github.com/jessevdk/go-flags` - Command-line argument parsing
+- `github.com/nayarsystems/iotrace` - I/O tracing for debugging
+- `go.bug.st/serial` - Serial port communication
 
 ## License
 
