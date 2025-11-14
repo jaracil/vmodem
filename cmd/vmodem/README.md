@@ -149,12 +149,35 @@ Access metrics at:
 - `http://localhost:8080/` - JSON metrics for all modems
 - `http://localhost:8080/proc` - Server uptime information
 
-**Metrics JSON Response includes:**
-- `status` - Current modem state (Detached, Idle, Dialing, Connected, ConnectedCmd, Ringing, Closed)
-- `modemId` - Modem identifier
-- Byte counters: `ttyRxBytes`, `ttyTxBytes`, `connRxBytes`, `connTxBytes`
-- Connection counts: `numConns`, `numInConns`, `numOutConns`
-- Timestamps: `lastTtyRxMs`, `lastTtyTxMs`, `lastAtCmdMs`, `lastConnMs`
+**Metrics JSON Response fields:**
+
+**Status Information:**
+- `modemId` - Unique identifier for the modem instance
+- `status` - Current operational state:
+  - `Detached` - No TTY client connected (initial state)
+  - `Idle` - TTY client connected, waiting for commands
+  - `Dialing` - Outgoing call in progress
+  - `Connected` - Active data connection (online mode)
+  - `ConnectedCmd` - In command mode during active connection (after +++ escape)
+  - `Ringing` - Incoming call being signaled
+  - `Closed` - Modem permanently closed
+
+**Byte Counters (cumulative totals):**
+- `ttyRxBytes` - Total bytes received from the TTY (client commands and data)
+- `ttyTxBytes` - Total bytes transmitted to the TTY (responses and received data)
+- `connRxBytes` - Total bytes received from network connections (online mode only)
+- `connTxBytes` - Total bytes transmitted to network connections (online mode only)
+
+**Connection Statistics:**
+- `numConns` - Total number of connections handled since startup
+- `numInConns` - Number of incoming connections (received calls)
+- `numOutConns` - Number of outgoing connections (dialed calls)
+
+**Activity Timestamps (milliseconds elapsed since event):**
+- `lastTtyRxMs` - Milliseconds since last byte received from TTY (-1 if never)
+- `lastTtyTxMs` - Milliseconds since last byte sent to TTY (-1 if never)
+- `lastAtCmdMs` - Milliseconds since last AT command processed (-1 if never)
+- `lastConnMs` - Milliseconds since last connection establishment (-1 if never)
 
 ## Examples
 
