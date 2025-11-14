@@ -71,8 +71,10 @@ This creates 2 virtual modems listening on port 2020, with TTY devices at:
 - `-w, --watchdog <seconds>`: Connection timeout in seconds (0 = disabled, default: 0)
 - `-m, --metrics <address>`: Enable metrics http server. Format: host:port
 - `-C, --command <pattern>`: Command hook. Format: regexp->response->result
+- `-L, --line <pattern>`: Line hook. Format: regexp->response->result
 - `-T, --translate <pattern>`: Translate phone number to host. Format: regexp->format
 - `-A, --attach <config>`: Attach two TTY's. Format: tty1:tty2:speed,data_bits,parity,stop_bits
+- `-I, --init <command>`: AT commands to initialize each modem (without AT prefix)
 
 ### Phone Number Translation
 
@@ -91,12 +93,40 @@ Configure how phone numbers are translated to network addresses:
 
 ### Custom AT Commands
 
-Add custom AT command responses:
+Add custom AT command responses using command hooks (match individual commands):
 
 ```bash
 # Custom command hooks: pattern->response->result
 ./vmodem -C "^I0$->VModem Server v1.0->OK" -C "^I1$->Virtual Modem->OK"
 ```
+
+Or use line hooks (match complete command lines before parsing):
+
+```bash
+# Line hooks intercept entire command lines
+./vmodem -L "^CUSTOM.*->Custom command executed->OK"
+```
+
+**Difference between Command and Line hooks:**
+- Command hooks (`-C`) match individual parsed AT commands
+- Line hooks (`-L`) match the entire command line before parsing, useful for custom syntax
+
+### Modem Initialization
+
+Initialize modems with AT commands on startup (before TTY is exposed):
+
+```bash
+# Initialize with echo off and verbose mode
+./vmodem -I "e0" -I "v1"
+
+# Multiple commands can be chained in one initialization
+./vmodem -I "e0v1q0"
+
+# Set S-registers on startup
+./vmodem -I "s0=2"  # Auto-answer after 2 rings
+```
+
+This is useful for setting default modem behavior before applications connect.
 
 ### Serial Port Integration
 
@@ -118,6 +148,13 @@ Enable HTTP metrics endpoint:
 Access metrics at:
 - `http://localhost:8080/` - JSON metrics for all modems
 - `http://localhost:8080/proc` - Server uptime information
+
+**Metrics JSON Response includes:**
+- `status` - Current modem state (Detached, Idle, Dialing, Connected, ConnectedCmd, Ringing, Closed)
+- `modemId` - Modem identifier
+- Byte counters: `ttyRxBytes`, `ttyTxBytes`, `connRxBytes`, `connTxBytes`
+- Connection counts: `numConns`, `numInConns`, `numOutConns`
+- Timestamps: `lastTtyRxMs`, `lastTtyTxMs`, `lastAtCmdMs`, `lastConnMs`
 
 ## Examples
 
@@ -153,8 +190,10 @@ ATDT*192*168*1*100*80  # Dial 192.168.1.100:80
   -t /var/lib/vmodem \
   -m 0.0.0.0:8080 \
   -w 300 \
+  -I "e0v1" \
   -T "^(\\d{3})(\\d{3})(\\d{4})$->pbx.company.com:\\1\\2\\3" \
   -C "^I0$->CompanyModem v2.1->OK" \
+  -L "^PING$->PONG->OK" \
   --nagle-size 2048 \
   --nagle-timeout 100
 ```
