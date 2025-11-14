@@ -300,7 +300,7 @@ Use verbose flags for debugging:
 ## Performance
 
 The server is designed for production use and can handle:
-- Multiple concurrent connections per modem
+- Multiple modem instances per process
 - High throughput data transfer
 - Long-running stable operation
 - Automatic resource cleanup
